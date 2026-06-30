@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autotomo"
+version = "0.1.0"
+description = "Automated polarisation tomography for photonic experiments"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "matplotlib",
+    "pyserial",
+]
+
+[project.scripts]
+tomo-auto      = "tomo_auto:main"
+autotomo-measure = "measurement:main"
+set-stages     = "set_stage_angles:main"
+read-data      = "read_data:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths  = ["tests"]
