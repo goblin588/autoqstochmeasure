@@ -54,30 +54,40 @@ basis_vectors_2 = {
     "L": L_2
 }
 
-# For projection in tomography
-# Angles [HWP, QWP] 
+# State-prep angles [HWP, QWP]: input arm is HWP-then-QWP, so these take H -> basis.
 basis_angles = {
     "H": [0,0],
     "V": [45,0],
     "A": [-22.5,45],
     "D": [22.5,45],
-    "R": [22.5,0],
-    "L": [-22.5,0],
+    "R": [-22.5,0],
+    "L": [22.5,0],
+}
+
+# Analyzer angles [HWP, QWP]: tomography arm is QWP-then-HWP, so these take basis -> H.
+# Same HWP angle as basis_angles, QWP angle shifted by 90 (QWP(t)^-1 == QWP(t+90)).
+tomo_angles = {
+    name: [hwp, qwp + 90 if qwp <= 0 else qwp - 90]
+    for name, (hwp, qwp) in basis_angles.items()
+}
+
+process_state_angles = {
     "s0_3": [302.88, 147.052],
     "s0_4": [290.14, 118.88], 
     "s0_5": [104.33, 131.71], 
     "s0_6": [39.35, 50.344]
 }
 
-# import OpticsLib as ol
+if __name__ == "__main__":
+    # Scratch check: prep D then analyze with HWP(22.5)/QWP(0), print overlaps.
+    import optics as ol
 
-# input_state = basis_vectors_2["V"]
+    basis = "D"
 
-# # print(ol.HWP(basis_angles["D"][0]))
-# # print(ol.QWP(basis_angles["D"][1]))
-# # print(np.transpose(input_state))
+    input_state = basis_vectors_2["H"]
 
-# out = ol.QWP(0)@ol.HWP(-22.5)@input_state
+    out = ol.QWP(0)@ol.HWP(22.5)@ol.QWP(-basis_angles[basis][1])@ol.HWP(-basis_angles[basis][0])@input_state
 
-# overlap = np.abs(np.conjugate(np.transpose(out))@basis_vectors_2["L"])**2
-# print(overlap)
+    for basis in basis_angles.keys():
+        overlap = np.abs(np.conjugate(np.transpose(out)) @ basis_vectors_2[basis])**2
+        print(f'{basis}: {overlap}')

@@ -2,7 +2,7 @@
 Functions associated with Tomography control / movement of stages.
 """
 
-from libraries.basis_vectors import basis_angles
+from libraries.basis_vectors import basis_angles, tomo_angles
 from libraries.settings import SIM_MODE
 import time
 
@@ -38,9 +38,9 @@ def single_tomography(qwp, hwp, powermeter, smc_port) -> dict:
     """Measure all 6 output states (HVADRL) for the current input state."""
     res = {}
     for basis in FULL_BASES:
-        print(f"Measuring Output |{basis}>, HWP: {basis_angles[basis][0]}, QWP: {basis_angles[basis][1]}")
-        move_stage(hwp, basis_angles[basis][0], smc_port)
-        move_stage(qwp, basis_angles[basis][1], smc_port)
+        print(f"Measuring Output |{basis}>, HWP: {tomo_angles[basis][0]}, QWP: {tomo_angles[basis][1]}")
+        move_stage(hwp, tomo_angles[basis][0], smc_port)
+        move_stage(qwp, tomo_angles[basis][1], smc_port)
         time.sleep(0.1)
         pwr, err = powermeter.read(n=300)
         print(f"Power: {round(pwr * 1000, 2)} mW")

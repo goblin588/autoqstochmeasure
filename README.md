@@ -1,6 +1,6 @@
 # autotomo
 
-Automated polarisation tomography for photonic experiments. Controls SMC100 motor stages (HWP/QWP waveplate pairs) and a Thorlabs PM100USB power meter to characterise optical unitaries.
+Automated measurement software for quantum dimentionality experiment. Interfaces with SNSPD detectors and SMC100 motor stages to perform statistic collection and tomography on memory output state.
 
 ## Setup
 
@@ -12,9 +12,9 @@ uv sync
 
 | Script | Purpose |
 |--------|---------|
-| `python src/tomo_auto.py` | Main tomography menu — single basis, HVAD, HVADRL, multi-run, replot |
 | `python src/measurement.py` | Set input waveplates to the s0 state for a given unitary |
 | `python src/set_stage_angles.py` | Manually move waveplate stage pairs to a named basis or angle |
+| `python src/home_stages.py` | Homes stages which have not been since reset.  |
 
 ## Project structure
 

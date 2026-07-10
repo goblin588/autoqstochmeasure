@@ -2,24 +2,28 @@
 Manually set waveplate stage pairs to a named basis or specific angles.
 """
 import libraries.tomography as tl
-from libraries.basis_vectors import basis_angles
+from libraries.basis_vectors import basis_angles, tomo_angles
 from libraries.settings import (HWP_IN, QWP_IN, HWP_IN_2, QWP_IN_2,
                                  HWP_TOM_DUMP, QWP_TOM_DUMP,
                                  HWP_TOM_1, QWP_TOM_1, HWP_OUT_2, QWP_OUT_2,
                                  COMPORT, Waveplate)
 
+# Input-arm pairs are HWP-then-QWP (state prep, H -> basis): basis_angles.
+# Tomography-arm pairs are QWP-then-HWP (analyzer, basis -> H): tomo_angles.
+# out2 is context-dependent (loop mode reverses the beam through it, flipping
+# its effective order) so it's left on basis_angles here as a raw reference.
 _PAIRS = {
-    'in':   (HWP_IN,    QWP_IN,    "Input     (HWP_IN   / QWP_IN)"),
-    'in2':  (HWP_IN_2,  QWP_IN_2,  "Input 2   (HWP_IN_2 / QWP_IN_2)"),
-    'dump': (HWP_TOM_DUMP, QWP_TOM_DUMP, "Tomo dump (HWP_TOM_DUMP / QWP_TOM_DUMP)"),
-    'tom1': (HWP_TOM_1, QWP_TOM_1, "Tomo 1    (HWP_TOM_1 / QWP_TOM_1)"),
-    'out2': (HWP_OUT_2, QWP_OUT_2, "Output 2  (HWP_OUT_2 / QWP_OUT_2)"),
+    'in':   (HWP_IN,    QWP_IN,    "Input     (HWP_IN   / QWP_IN)", basis_angles),
+    'in2':  (HWP_IN_2,  QWP_IN_2,  "Input 2   (HWP_IN_2 / QWP_IN_2)", basis_angles),
+    'dump': (HWP_TOM_DUMP, QWP_TOM_DUMP, "Tomo dump (HWP_TOM_DUMP / QWP_TOM_DUMP)", tomo_angles),
+    'tom1': (HWP_TOM_1, QWP_TOM_1, "Tomo 1    (HWP_TOM_1 / QWP_TOM_1)", tomo_angles),
+    'out2': (HWP_OUT_2, QWP_OUT_2, "Output 2  (HWP_OUT_2 / QWP_OUT_2)", basis_angles),
 }
 
 # Map stage ID → Waveplate so OA can be applied when addressing by number
 _STAGE_MAP: dict[int, Waveplate] = {
     wp.ID: wp
-    for _, (hwp, qwp, _) in _PAIRS.items()
+    for _, (hwp, qwp, _, _) in _PAIRS.items()
     for wp in (hwp, qwp)
 }
 
@@ -28,16 +32,16 @@ def _beep():
     print('\a', end='', flush=True)
 
 
-def _move_pair(hwp, qwp, basis):
-    tl.move_stage(hwp, basis_angles[basis][0], COMPORT)
-    tl.move_stage(qwp, basis_angles[basis][1], COMPORT)
-    print(f"  Set to |{basis}⟩  (HWP={basis_angles[basis][0]:.2f}°, QWP={basis_angles[basis][1]:.2f}°)")
+def _move_pair(hwp, qwp, basis, angles=basis_angles):
+    tl.move_stage(hwp, angles[basis][0], COMPORT)
+    tl.move_stage(qwp, angles[basis][1], COMPORT)
+    print(f"  Set to |{basis}⟩  (HWP={angles[basis][0]:.2f}°, QWP={angles[basis][1]:.2f}°)")
 
 
-def _set_pair_interactive(hwp, qwp, label):
+def _set_pair_interactive(hwp, qwp, label, angles):
     val = input(f"  {label}\n  Basis (H/V/A/D/R/L) or 'manual': ").strip().upper()
-    if val in basis_angles:
-        _move_pair(hwp, qwp, val)
+    if val in angles:
+        _move_pair(hwp, qwp, val, angles)
     elif val == 'MANUAL':
         hwp_angle = float(input("    HWP angle (deg): "))
         qwp_angle = float(input("    QWP angle (deg): "))
@@ -74,8 +78,8 @@ def main():
     if val in basis_angles:
         _move_pair(HWP_IN, QWP_IN, val)
         tom = input("Tom basis (H/V/A/D/R/L): ").strip().upper()
-        if tom in basis_angles:
-            _move_pair(HWP_TOM_DUMP, QWP_TOM_DUMP, tom)
+        if tom in tomo_angles:
+            _move_pair(HWP_TOM_DUMP, QWP_TOM_DUMP, tom, tomo_angles)
         else:
             print("Unrecognised tom basis — skipping.")
 
@@ -86,11 +90,11 @@ def main():
             if choice in ('', 'done'):
                 break
             elif choice == 'all':
-                for hwp, qwp, label in _PAIRS.values():
-                    _set_pair_interactive(hwp, qwp, label)
+                for hwp, qwp, label, angles in _PAIRS.values():
+                    _set_pair_interactive(hwp, qwp, label, angles)
             elif choice in _PAIRS:
-                hwp, qwp, label = _PAIRS[choice]
-                _set_pair_interactive(hwp, qwp, label)
+                hwp, qwp, label, angles = _PAIRS[choice]
+                _set_pair_interactive(hwp, qwp, label, angles)
             else:
                 print("  Options: in, in2, dump, tom1, out2, all")
 
