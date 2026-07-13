@@ -1,7 +1,12 @@
 from collections.abc import Sequence
+import json
+import socket
 import time
 import clr
 import os
+
+from libraries.settings import (ANTILATCH_HOST, ANTILATCH_PORT,
+                                ANTILATCH_DEVICE_IDS, ANTILATCH_BIAS_VOLTAGES)
 
 from System import Int32
 
@@ -14,6 +19,26 @@ print("Loading DLL from:", dll_path)
 clr.AddReference(dll_path)
 
 from TimeTag import TTInterface, Logic
+
+def reset_detectors():
+    """Ask the antilatch server to cycle the detector bias voltages.
+
+    Default antilatch_func for Logic16: called by read_counts_integrated
+    whenever it sees a latched channel (zero singles in a timeslice).
+    Unreachable server is a warning, not an error — the counting loop
+    retries regardless.
+    """
+    try:
+        with socket.create_connection((ANTILATCH_HOST, ANTILATCH_PORT), timeout=10) as s:
+            s.sendall(json.dumps({
+                "message": "restart",
+                "device_id_list": ANTILATCH_DEVICE_IDS,
+                "bias_voltage_list": ANTILATCH_BIAS_VOLTAGES,
+            }).encode('utf-8'))
+            s.recv(1024)  # wait for ack so we don't resume counting mid-reset
+    except OSError as e:
+        print(f"\nWARNING: antilatch server unreachable ({e}); detectors not reset")
+
 
 # Helper function to convert channel to binary code
 def binary_code(channel: int | Sequence[int]) -> int:
@@ -39,7 +64,7 @@ class Logic16:
         # For antilatch
         self.singles = None
         self._antilatch_timeslice = 0.100 # 100 miliseconds
-        self.antilatch_func = lambda: print('test')
+        self.antilatch_func = reset_detectors
         self.coincidences = None
 
         self.TimerCounter1 = Int32

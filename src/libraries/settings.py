@@ -80,5 +80,16 @@ DELAYS = [DELAY_1, DELAY_2, DELAY_3, DELAY_4, DELAY_5, DELAY_6, DELAY_7, DELAY_8
 DET_CHS = [DET_CH3]
 
 SINGLE_DET_CHS = [TRIGG_CH, *DET_CHS]
-COINCIDENCE_CHS = [[TRIGG_CH, ch] for ch in DET_CHS] 
+COINCIDENCE_CHS = [[TRIGG_CH, ch] for ch in DET_CHS]
 COINCIDENCE_WINDOW = 20.0
+
+# ANTILATCH SERVER (detector bias reset over TCP, see detector-antilatch-server/)
+# These voltages are what actually get applied on reset — the server ignores its
+# own config.py when driven from here.
+ANTILATCH_HOST = '127.0.0.1'  # change to the blue-box PC's IP
+ANTILATCH_PORT = 12345
+ANTILATCH_DEVICE_IDS = [0, 1]
+ANTILATCH_BIAS_VOLTAGES = [
+    {0: 0.28, 1: 0.3, 2: 0.43, 3: 0.5, 4: 0.5, 5: 0.45, 6: 0.3, 7: 0.42},
+    {0: 0.42, 1: 0.2, 2: 0.25},
+]
