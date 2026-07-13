@@ -1,7 +1,38 @@
 from hardware.detector import Logic16
-from settings import TRIGG_CH, DET_CHS, COINCIDENCE_WINDOW, DELAYS
+from libraries.settings import TRIGG_CH, DET_CHS, COINCIDENCE_WINDOW, DELAYS
 import time
 import numpy as np
+
+def acquire_counts(
+    duration: float = 20.0,
+    herald_ch: int = TRIGG_CH,
+    signal_chs: list = DET_CHS,
+    coincidence_window: float = COINCIDENCE_WINDOW,
+    delays: list = DELAYS,
+):
+    """
+    Integrates counts for `duration` seconds and returns totals as a dict:
+    {'herald': ..., 'singles_ch{n}': ..., 'coinc_ch{n}': ..., 'int_time': ...}
+
+    Antilatch-safe via read_counts_integrated. int_time is the actual
+    counting time, which can be less than duration if latch events ate
+    timeslices — divide counts by it for rates.
+    """
+    with Logic16(coincidence_window=coincidence_window, logic_mode=True,
+                 integration_window=duration) as logic:
+        logic.configure(coincidence_window=coincidence_window, delays=delays)
+        c_counts, s_counts, int_time = logic.read_counts_integrated(
+            pos_singles=[herald_ch, *signal_chs],
+            pos_coincidence=[[herald_ch, ch] for ch in signal_chs],
+        )
+
+    row = {'herald': int(s_counts[0])}
+    for i, ch in enumerate(signal_chs):
+        row[f'singles_ch{ch}'] = int(s_counts[i + 1])
+        row[f'coinc_ch{ch}'] = int(c_counts[i])
+    row['int_time'] = int_time
+    return row
+
 
 def stream_herald_and_signal(
     herald_ch: int = TRIGG_CH,
@@ -51,7 +82,8 @@ def stream_herald_and_signal(
             time.sleep(0.05)
 
 
-def count_coincidences_with_delays(
+# rework to return a pandas dataframe with titles and counts maybe, maybe make a yield thing
+def stream_channels_with_delays(
     herald_ch: int = TRIGG_CH,
     signal_chs: list = DET_CHS,
     coincidence_window: float = COINCIDENCE_WINDOW,
@@ -105,6 +137,8 @@ def count_coincidences_with_delays(
                 f"total time {total_time:.2f} s"
             )
 
+
+# rework to be a delay optimizer if given an initial delay should just move up and down by +/- 30ns and check, also check coincidence windows between 5-1ns and chose smallest window with max counts 
 def find_delay_window(
     herald_ch: int = TRIGG_CH,
     signal_ch: int = DET_CHS[0],
