@@ -1,5 +1,5 @@
 from hardware.detector import Logic16
-from libraries.settings import TRIGG_CH, DET_CHS, COINCIDENCE_WINDOW, DELAYS
+from libraries.settings import TRIGG_CH, DET_CHS, DUMP_CH, COINCIDENCE_WINDOW, DELAYS, THRESHOLDS
 import time
 import numpy as np
 
@@ -20,7 +20,7 @@ def acquire_counts(
     """
     with Logic16(coincidence_window=coincidence_window, logic_mode=True,
                  integration_window=duration) as logic:
-        logic.configure(coincidence_window=coincidence_window, delays=delays)
+        logic.configure(threshold=THRESHOLDS, coincidence_window=coincidence_window, delays=delays)
         c_counts, s_counts, int_time = logic.read_counts_integrated(
             pos_singles=[herald_ch, *signal_chs],
             pos_coincidence=[[herald_ch, ch] for ch in signal_chs],
@@ -32,6 +32,36 @@ def acquire_counts(
         row[f'coinc_ch{ch}'] = int(c_counts[i])
     row['int_time'] = int_time
     return row
+
+
+def acquire_rows(
+    total: float | None = None,
+    integration: float = 1.0,
+    herald_ch: int = TRIGG_CH,
+    signal_chs: list = DET_CHS,
+    coincidence_window: float = COINCIDENCE_WINDOW,
+    delays: list = DELAYS,
+):
+    """Yield one totals-row per `integration` s (same schema as acquire_counts),
+    keeping the card open between rows. total=None streams until the caller
+    stops iterating (e.g. Ctrl-C); otherwise stops once `total` s are counted.
+    """
+    with Logic16(coincidence_window=coincidence_window, logic_mode=True,
+                 integration_window=integration) as logic:
+        logic.configure(threshold=THRESHOLDS, coincidence_window=coincidence_window, delays=delays)
+        counted = 0.0
+        while total is None or counted < total:
+            c_counts, s_counts, int_time = logic.read_counts_integrated(
+                pos_singles=[herald_ch, *signal_chs],
+                pos_coincidence=[[herald_ch, ch] for ch in signal_chs],
+            )
+            row = {'herald': int(s_counts[0])}
+            for i, ch in enumerate(signal_chs):
+                row[f'singles_ch{ch}'] = int(s_counts[i + 1])
+                row[f'coinc_ch{ch}'] = int(c_counts[i])
+            row['int_time'] = int_time
+            counted += int_time
+            yield row
 
 
 def stream_herald_and_signal(
@@ -58,7 +88,7 @@ def stream_herald_and_signal(
     print(f"Streaming herald (ch {herald_ch}) and signal (ch {signal_ch})...")
 
     with Logic16(coincidence_window=coincidence_window, logic_mode=True) as logic:
-        logic.configure(coincidence_window=coincidence_window, delays=delays)
+        logic.configure(threshold=THRESHOLDS, coincidence_window=coincidence_window, delays=delays)
 
         start_time = time.time()
         while (time.time() - start_time) < duration:
@@ -113,7 +143,7 @@ def stream_channels_with_delays(
         logic_mode=True,
         integration_window=integration_window,
     ) as logic:
-        logic.configure(coincidence_window=coincidence_window, delays=delays)
+        logic.configure(threshold=THRESHOLDS, coincidence_window=coincidence_window, delays=delays)
 
         c_counts, s_counts, total_time = logic.read_counts_integrated(
             pos_coincidence=coincidence_chs,
@@ -138,7 +168,71 @@ def stream_channels_with_delays(
             )
 
 
-# rework to be a delay optimizer if given an initial delay should just move up and down by +/- 30ns and check, also check coincidence windows between 5-1ns and chose smallest window with max counts 
+def tune_delays(
+    N,
+    step: float = 2.0,
+    span: float = 10.0,
+    integration_time: float = 1.0,
+    signal_chs: list = DET_CHS,
+    herald_ch: int = TRIGG_CH,
+):
+    """Re-centre each signal channel's delay after drift (scan ±span ns in
+    `step` ns moves, keep the delay with the highest coincidence rate).
+
+    The best value per channel is written back into settings.CHANNELS /
+    settings.DUMP_DELAYS, so delays_for(N) — and every later acquisition this
+    session — uses the tuned values. Answer y at the prompt to persist them
+    to calibration.json (loaded over the hardcoded defaults on import).
+
+    Finishes with a coincidence-window check at 3/2/1 ns and recommends the
+    smallest window that keeps >=90% of the 3 ns rate.
+    """
+    import libraries.settings as st
+    offsets = np.arange(-span, span + step / 2, step)
+    with Logic16(coincidence_window=COINCIDENCE_WINDOW, logic_mode=True,
+                 integration_window=integration_time) as logic:
+        logic.configure(threshold=THRESHOLDS, coincidence_window=COINCIDENCE_WINDOW)
+        for ch in signal_chs:
+            delays = st.delays_for(N)
+            current = delays[ch - 1]
+            rates = []
+            for off in offsets:
+                delays[ch - 1] = current + off
+                logic.set_delays(delays)
+                c, _s, t = logic.read_counts_integrated(
+                    pos_singles=[herald_ch, ch],
+                    pos_coincidence=[[herald_ch, ch]])
+                rates.append(c[0] / t if t > 0 else 0.0)
+            best = float(current + offsets[int(np.argmax(rates))])
+            if ch == DUMP_CH:
+                st.DUMP_DELAYS[int(N)] = best
+                where = f'DUMP_DELAYS[{int(N)}]'
+            else:
+                st.CHANNELS[ch]['delay'] = best
+                where = f'CHANNELS[{ch}]'
+            print(f"ch{ch}: {current:.0f} -> {best:.0f} ns ({where}), "
+                  f"peak {max(rates):.1f} Hz")
+
+        # window check at the tuned delays
+        logic.set_delays(st.delays_for(N))
+        rate_at = {}
+        for window in (3.0, 2.0, 1.0):
+            logic.set_coincidence_window(window)
+            c, _s, t = logic.read_counts_integrated(
+                pos_singles=[herald_ch, *signal_chs],
+                pos_coincidence=[[herald_ch, ch] for ch in signal_chs])
+            rate_at[window] = sum(c) / t if t > 0 else 0.0
+            print(f"window {window:.0f} ns: {rate_at[window]:.1f} Hz total coincidences")
+    best_window = min(w for w in rate_at if rate_at[w] >= 0.9 * rate_at[3.0])
+    print(f"Recommended COINCIDENCE_WINDOW = {best_window:.0f} ns "
+          f"(session still uses {COINCIDENCE_WINDOW} ns; edit settings.py to change)")
+    if input("Save tuned delays as new defaults? [y/N] ").strip().lower() == 'y':
+        st.save_calibration()
+    else:
+        print("Not saved — tuned delays apply for this session only.")
+
+
+# rework to be a delay optimizer if given an initial delay should just move up and down by +/- 30ns and check, also check coincidence windows between 5-1ns and chose smallest window with max counts
 def find_delay_window(
     herald_ch: int = TRIGG_CH,
     signal_ch: int = DET_CHS[0],
@@ -202,7 +296,7 @@ def find_delay_window(
         logic_mode=True,
         integration_window=integration_time,
     ) as logic:
-        logic.configure(coincidence_window=coincidence_window)
+        logic.configure(threshold=THRESHOLDS, coincidence_window=coincidence_window)
 
         while window > target_window:
             # Build scan points centred on bins of width `window` across current range.
