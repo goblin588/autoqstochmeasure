@@ -108,8 +108,11 @@ class Logic16:
             self.delays = {k: default_delay for k in range(1, self._total_channels + 1)}
             self.set_delays(channel_delays=channel_delays)
 
-    def configure(self, threshold: float = 0.5, coincidence_window: float = None, delays=None):
-        self.set_input_threshold(default_threshold=threshold)
+    def configure(self, threshold: float | dict = 0.5, coincidence_window: float = None, delays=None):
+        if isinstance(threshold, dict):
+            self.set_input_threshold(channel_threshold_dict=threshold)
+        else:
+            self.set_input_threshold(default_threshold=threshold)
         if coincidence_window is not None:
             self.set_coincidence_window(coincidence_window)
         if delays is not None:

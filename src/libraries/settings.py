@@ -3,6 +3,7 @@
 Hardware settings
 """
 
+import json
 import os
 from pathlib import Path
 
@@ -19,77 +20,85 @@ SIM_MODE = os.environ.get('AUTOTOMO_SIM', '0') == '1'
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FIG_DIR = PROJECT_ROOT / "data" / "Figures"
 
-# OPTICAL AXIS
-qwp_in_oa = 3
-hwp_in_oa = 54.57 + 45  # +45: true input polarisation is V, not H (basis_angles assumes H)
-qwp_tom_dump_oa = 73
-hwp_tom_dump_oa = 35.5
-qwp_in_2_oa = 131.32
-hwp_in_2_oa = 29.24
-hwp_tom_1_oa = 41.5
-qwp_tom_1_oa = 107.58
-hwp_out_2_oa = 13
-qwp_out_2_oa = 12.5
+# WAVEPLATES: stage number + optical axis (deg)
+WAVEPLATES = {
+    'HWP_IN':       {'stage': 6,  'oa': 54.57 + 45},  # +45: true input polarisation is V, not H (basis_angles assumes H)
+    'QWP_IN':       {'stage': 8,  'oa': 3},
+    'HWP_IN_2':     {'stage': 1,  'oa': 29.24},
+    'QWP_IN_2':     {'stage': 7,  'oa': 131.32},
+    'HWP_TOM_1':    {'stage': 4,  'oa': 41.5},
+    'QWP_TOM_1':    {'stage': 9,  'oa': 107.58},
+    'HWP_OUT_2':    {'stage': 14, 'oa': 13},
+    'QWP_OUT_2':    {'stage': 12, 'oa': 12.5},
+    'HWP_TOM_DUMP': {'stage': 11, 'oa': 35.5},
+    'QWP_TOM_DUMP': {'stage': 13, 'oa': 73},
+}
+
+# Bind each entry as a module-level Waveplate (HWP_IN, QWP_IN, ...) so
+# `from libraries.settings import HWP_IN` keeps working everywhere.
+for _name, _cfg in WAVEPLATES.items():
+    globals()[_name] = Waveplate(_cfg['stage'], _cfg['oa'])
 
 
-# STAGE NUMBER 
-hwp_in_stage = 6
-qwp_in_stage = 8
-qwp_in_2_stage = 7
-hwp_in_2_stage = 1
-hwp_tom_1_stage = 4
-qwp_tom_1_stage = 9
-hwp_out_2_stage = 14
-qwp_out_2_stage = 12
-qwp_tom_dump_stage = 13
-hwp_tom_dump_stage = 11
+# CC CHANNELS: delay (ns) + input threshold (V) per channel.
+# Herald on ch3; loop-k "1" outputs on ch2/4/6/8; dump on ch7.
+# Loop-channel delays are fixed regardless of process length; only the dump
+# delay changes — a photon dumped for process N is dumped on the (N+1)th
+# loop, having completed N loops, so its delay comes from DUMP_DELAYS.
+TRIGG_CH = 3
+LOOP_CHS = [2, 4, 6, 8]  # loop 1..4
+DUMP_CH = 7
+CHANNELS = {
+    3: {'delay': 2841, 'threshold': 0.6},  # herald
+    2: {'delay': 1970, 'threshold': 0.8},  # loop 1
+    4: {'delay': 1541, 'threshold': 0.8},  # loop 2
+    6: {'delay': 1107, 'threshold': 0.8},  # loop 3
+    8: {'delay': 672,  'threshold': 0.8},  # loop 4
+    7: {'delay': None, 'threshold': 0.8},  # dump — delay per N from DUMP_DELAYS
+}
+DUMP_DELAYS = {0: 2388, 1: 1949, 2: 1515, 3: 1060, 4: 643}  # keyed by loops completed before dump
 
-# WAVEPLATES
-QWP_IN   = Waveplate(qwp_in_stage,    qwp_in_oa)
-HWP_IN   = Waveplate(hwp_in_stage,    hwp_in_oa)
-QWP_TOM_DUMP = Waveplate(qwp_tom_dump_stage, qwp_tom_dump_oa)
-HWP_TOM_DUMP = Waveplate(hwp_tom_dump_stage, hwp_tom_dump_oa)
-QWP_IN_2 = Waveplate(qwp_in_2_stage,  qwp_in_2_oa)
-HWP_IN_2 = Waveplate(hwp_in_2_stage,  hwp_in_2_oa)
-HWP_TOM_1 = Waveplate(hwp_tom_1_stage, hwp_tom_1_oa)
-QWP_TOM_1 = Waveplate(qwp_tom_1_stage, qwp_tom_1_oa)
-HWP_OUT_2 = Waveplate(hwp_out_2_stage, hwp_out_2_oa)
-QWP_OUT_2 = Waveplate(qwp_out_2_stage, qwp_out_2_oa)
+THRESHOLDS = {ch: cfg['threshold'] for ch, cfg in CHANNELS.items()}
 
+# Tuned delays saved by countingcard.tune_delays override the defaults above.
+# Delete calibration.json to fall back to the hardcoded values.
+CAL_FILE = Path(__file__).with_name('calibration.json')
+if CAL_FILE.exists():
+    _cal = json.loads(CAL_FILE.read_text())
+    for _ch, _delay in _cal['channel_delays'].items():
+        CHANNELS[int(_ch)]['delay'] = _delay
+    DUMP_DELAYS.update({int(k): v for k, v in _cal['dump_delays'].items()})
 
-# CC DELAY SETTINGS 
-DELAY_1 = 0
-DELAY_2 = 0
-DELAY_3 = 0
-DELAY_4 = 0
-DELAY_5 = 30
-DELAY_6 = 0
-DELAY_7 = 0
-DELAY_8 = 0
+def save_calibration():
+    """Persist the current (tuned) delays; loaded over the defaults on import."""
+    CAL_FILE.write_text(json.dumps({
+        'channel_delays': {ch: cfg['delay'] for ch, cfg in CHANNELS.items()
+                           if cfg['delay'] is not None},
+        'dump_delays': DUMP_DELAYS,
+    }, indent=1))
+    print(f"Saved calibration -> {CAL_FILE}")
 
-# CC CHANNELS 
-TRIGG_CH = 8
-DET_CH1 = 1
-DET_CH2 = 2
-DET_CH3 = 3
-DET_CH4 = 4
-DET_CH5 = 5
+def delays_for(N):
+    """Full 8-channel delay list for process length N (dump = N-loop dump)."""
+    d = [0.0] * 8
+    for ch, cfg in CHANNELS.items():
+        if cfg['delay'] is not None:
+            d[ch - 1] = cfg['delay']
+    d[DUMP_CH - 1] = DUMP_DELAYS[int(N)]
+    return d
 
-
-DELAYS = [DELAY_1, DELAY_2, DELAY_3, DELAY_4, DELAY_5, DELAY_6, DELAY_7, DELAY_8]
-DET_CHS = [DET_CH3]
+DELAYS = delays_for(3)  # generic default for diagnostics; measurement passes delays_for(N)
+DET_CHS = [*LOOP_CHS, DUMP_CH]
 
 SINGLE_DET_CHS = [TRIGG_CH, *DET_CHS]
 COINCIDENCE_CHS = [[TRIGG_CH, ch] for ch in DET_CHS]
-COINCIDENCE_WINDOW = 20.0
+COINCIDENCE_WINDOW = 2.0  # ns — keep within 1-3; tune_delays' window check recommends a value
 
 # ANTILATCH SERVER (detector bias reset over TCP, see detector-antilatch-server/)
 # These voltages are what actually get applied on reset — the server ignores its
-# own config.py when driven from here.
-ANTILATCH_HOST = '127.0.0.1'  # change to the blue-box PC's IP
-ANTILATCH_PORT = 12345
-ANTILATCH_DEVICE_IDS = [0, 1]
-ANTILATCH_BIAS_VOLTAGES = [
-    {0: 0.28, 1: 0.3, 2: 0.43, 3: 0.5, 4: 0.5, 5: 0.45, 6: 0.3, 7: 0.42},
-    {0: 0.42, 1: 0.2, 2: 0.25},
-]
+# own config.py when driven from here. Keep in sync with
+# detector-antilatch-server/config.py (the copy deployed on the blue-box PC).
+ANTILATCH_HOST = '10.126.251.233'  # blue-box PC
+ANTILATCH_PORT = 65201
+ANTILATCH_DEVICE_IDS = [0]
+ANTILATCH_BIAS_VOLTAGES = [{0: 4, 1: 4.45, 2: 0.23, 3: 3.45}]
