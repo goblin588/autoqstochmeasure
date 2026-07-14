@@ -144,6 +144,19 @@ def measurement(N, performTomo=False, allInputs=False, duration=20.0):
     return rows
 
 
+def test_detectors(duration=2.0):
+    """Short acquisition; report whether each channel is seeing counts."""
+    counts = _acquire_counts(duration)
+    ok = True
+    for name in ['herald', *(f'singles_ch{ch}' for ch in DET_CHS)]:
+        n = counts[name]
+        status = "OK" if n > 0 else "NO COUNTS"
+        ok = ok and n > 0
+        print(f"  {name}: {n} counts in {counts['int_time']:.2f}s [{status}]")
+    print("Detectors OK" if ok else "Some channels read zero — check detectors")
+    return ok
+
+
 def ping_antilatch():
     """Round-trip a ping to the antilatch server. No detectors or stages touched.
 
@@ -185,10 +198,11 @@ def main():
         n = input(
             "Do you want to:\n"
             "\t1. Set unitary and s0 input state\n"
-            "\t2. Collect statistics without tomo\n"
-            "\t3. Collect statistics with output tomo\n"
-            f"\t4. Collect statistics for each input s{N}_n\n"
-            "\t5. Test antilatch server connection\n"
+            "\t2. Test detectors\n"
+            "\t3. Collect statistics without tomo\n"
+            "\t4. Collect statistics with output tomo\n"
+            f"\t5. Collect statistics for each input s{N}_n\n"
+            "\t6. Test antilatch server connection\n"
             )
 
         match n:
@@ -197,17 +211,19 @@ def main():
                 _set_unitary(N)
                 _set_input_state(N, 0)
             case '2':
-                # Statistics 
-                measurement(N)
+                test_detectors()
             case '3':
+                # Statistics
+                measurement(N)
+            case '4':
                 # Statistics with tomo
                 measurement(N, performTomo=True)
-            case '4':
-                measurement(N, allInputs=True)
             case '5':
+                measurement(N, allInputs=True)
+            case '6':
                 ping_antilatch()
             case _:
-                print("Please choose a valid option 1-5 from list:")
+                print("Please choose a valid option 1-6 from list:")
 
 
 if __name__ == "__main__":
