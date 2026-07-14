@@ -5,7 +5,9 @@ sets HWP_IN/QWP_IN to s0_N and the fixed waveplates (IN_2/OUT_2) to that U's ang
 Run with AUTOTOMO_SIM=1 or --sim for mock hardware.
 """
 import csv
+import json
 import os
+import socket
 import sys
 import datetime
 
@@ -19,7 +21,7 @@ from libraries.waveplate_angles import unitaries_angles
 from libraries.settings import (HWP_IN, QWP_IN, QWP_TOM_DUMP, HWP_TOM_DUMP,
                                 HWP_IN_2, QWP_IN_2, HWP_OUT_2, QWP_OUT_2,
                                 HWP_TOM_1, QWP_TOM_1, COMPORT, SIM_MODE,
-                                DET_CHS)
+                                DET_CHS, ANTILATCH_HOST, ANTILATCH_PORT)
 from libraries.notifier import notify
 
 
@@ -142,6 +144,28 @@ def measurement(N, performTomo=False, allInputs=False, duration=20.0):
     return rows
 
 
+def ping_antilatch():
+    """Round-trip a ping to the antilatch server. No detectors or stages touched.
+
+    The server echoes back any non-"restart" message, so a matching echo
+    means it is up and parsing JSON. bias_voltage_list must be present
+    (even empty) because the server reads it before checking the message.
+    """
+    msg = json.dumps({"message": "ping", "bias_voltage_list": {}}).encode('utf-8')
+    try:
+        with socket.create_connection((ANTILATCH_HOST, ANTILATCH_PORT), timeout=5) as s:
+            s.sendall(msg)
+            reply = s.recv(1024)
+    except OSError as e:
+        print(f"Antilatch server UNREACHABLE at {ANTILATCH_HOST}:{ANTILATCH_PORT} ({e})")
+        return False
+    if reply == msg:
+        print(f"Antilatch server OK at {ANTILATCH_HOST}:{ANTILATCH_PORT} (echo received)")
+        return True
+    print(f"Antilatch server reachable but sent unexpected reply: {reply!r}")
+    return False
+
+
 def main():
     if SIM_MODE:
         print("[SIM MODE] Running without hardware")
@@ -164,6 +188,7 @@ def main():
             "\t2. Collect statistics without tomo\n"
             "\t3. Collect statistics with output tomo\n"
             f"\t4. Collect statistics for each input s{N}_n\n"
+            "\t5. Test antilatch server connection\n"
             )
 
         match n:
@@ -179,8 +204,10 @@ def main():
                 measurement(N, performTomo=True)
             case '4':
                 measurement(N, allInputs=True)
+            case '5':
+                ping_antilatch()
             case _:
-                print("Please choose a valid option 1-4 from list:") 
+                print("Please choose a valid option 1-5 from list:")
 
 
 if __name__ == "__main__":
