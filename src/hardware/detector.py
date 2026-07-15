@@ -202,9 +202,9 @@ class Logic16:
             # If detectors keep latching, wait for a bit instead of sending another antilatch request.
             if has_latched > 5:
                 self.antilatch_func()
-                print('WARNING: several latching events in a row, waiting 1 min.')
+                print('WARNING: several latching events in a row, waiting 30 secs.')
                 has_latched = 0
-                time.sleep(60)
+                time.sleep(30)
                 continue
             if antilatch_flags > 0:
                 self.antilatch_func()

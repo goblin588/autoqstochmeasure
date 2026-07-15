@@ -22,7 +22,7 @@ from libraries.waveplate_angles import unitaries_angles
 from libraries.settings import (HWP_IN, QWP_IN, QWP_TOM_DUMP, HWP_TOM_DUMP,
                                 HWP_IN_2, QWP_IN_2, HWP_OUT_2, QWP_OUT_2,
                                 HWP_TOM_1, QWP_TOM_1, COMPORT, SIM_MODE,
-                                DET_CHS, LOOP_CHS, DUMP_CH, delays_for,
+                                DET_CHS, LOOP_CHS, DUMP_CH, TRIGG_CH, delays_for,
                                 ANTILATCH_HOST, ANTILATCH_PORT)
 from libraries.notifier import notify
 
@@ -187,18 +187,35 @@ def _ask_N():
 
 
 def test_detectors(N='3', duration=2.0):
-    """Short acquisition; report whether each channel is seeing counts.
+    """Short acquisition; report whether the chosen channels see counts.
 
-    N only sets the dump delay, which doesn't affect the singles check —
-    any valid N works, so the caller isn't asked."""
+    Asks which channels to check (some legitimately sit dark depending on
+    the process), Enter = all. N only sets the dump delay, which doesn't
+    affect the singles check — any valid N works, so the caller isn't asked."""
+    names = {TRIGG_CH: 'herald', **{ch: f'singles_ch{ch}' for ch in DET_CHS}}
+    raw = input(f"Channels to test ({TRIGG_CH}=herald, "
+                f"{', '.join(map(str, DET_CHS))}; Enter = all): ").strip()
+    if raw:
+        try:
+            chans = [int(c) for c in raw.replace(',', ' ').split()]
+        except ValueError:
+            print("Enter channel numbers separated by spaces or commas")
+            return False
+        bad = [c for c in chans if c not in names]
+        if bad:
+            print(f"Unknown channel(s) {bad}; pick from {list(names)}")
+            return False
+    else:
+        chans = list(names)
+
     counts = _acquire_counts(duration, N)
     ok = True
-    for name in ['herald', *(f'singles_ch{ch}' for ch in DET_CHS)]:
-        n = counts[name]
+    for ch in chans:
+        n = counts[names[ch]]
         status = "OK" if n > 0 else "NO COUNTS"
         ok = ok and n > 0
-        print(f"  {name}: {n} counts in {counts['int_time']:.2f}s [{status}]")
-    print("Detectors OK" if ok else "Some channels read zero — check detectors")
+        print(f"  ch{ch} ({names[ch]}): {n} counts in {counts['int_time']:.2f}s [{status}]")
+    print("Detectors OK" if ok else "Some tested channels read zero — check detectors")
     return ok
 
 
@@ -206,7 +223,8 @@ def read_outputs(duration=20.0):
     """Stream one output channel live: singles + coincidences with the herald,
     using the correct delay. Only the dump delay depends on the process, so
     the unitary N is asked only when streaming the dump."""
-    labels = {**{ch: f'loop{i + 1}' for i, ch in enumerate(LOOP_CHS)}, DUMP_CH: 'dump'}
+    labels = {TRIGG_CH: 'herald',
+              **{ch: f'loop{i + 1}' for i, ch in enumerate(LOOP_CHS)}, DUMP_CH: 'dump'}
     menu = ', '.join(f'{ch}={label}' for ch, label in labels.items())
     choice = input(f"Which channel? ({menu}): ").strip()
     try:
