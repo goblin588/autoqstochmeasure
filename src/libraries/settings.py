@@ -54,7 +54,7 @@ CHANNELS = {
     4: {'delay': 1541, 'threshold': 0.8},  # loop 2
     6: {'delay': 1107, 'threshold': 0.8},  # loop 3
     8: {'delay': 672,  'threshold': 0.8},  # loop 4
-    7: {'delay': None, 'threshold': 0.8},  # dump — delay per N from DUMP_DELAYS
+    7: {'delay': None, 'threshold': 0.2},  # dump — delay per N from DUMP_DELAYS
 }
 DUMP_DELAYS = {0: 2388, 1: 1949, 2: 1515, 3: 1060, 4: 643}  # keyed by loops completed before dump
 
