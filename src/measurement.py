@@ -227,16 +227,33 @@ def ping_antilatch():
     """Round-trip a ping to the antilatch server. No detectors or stages touched.
 
     The server echoes back any non-"restart" message, so a matching echo
-    means it is up and parsing JSON.
+    means it is up and parsing JSON. bias_voltage_list is included because
+    older server versions crash on messages without it.
+
+    Reports each phase separately: connect failure = server/port unreachable;
+    reply timeout = ping delivered but the echo never came back (server-side
+    crash, or the network dropping server->client traffic).
     """
-    msg = json.dumps({"message": "ping"}).encode('utf-8')
+    msg = json.dumps({"message": "ping", "bias_voltage_list": {}}).encode('utf-8')
     try:
-        with socket.create_connection((ANTILATCH_HOST, ANTILATCH_PORT), timeout=5) as s:
-            s.sendall(msg)
-            reply = s.recv(1024)
+        s = socket.create_connection((ANTILATCH_HOST, ANTILATCH_PORT), timeout=5)
     except OSError as e:
-        print(f"Antilatch server UNREACHABLE at {ANTILATCH_HOST}:{ANTILATCH_PORT} ({e})")
+        print(f"CONNECT FAILED to {ANTILATCH_HOST}:{ANTILATCH_PORT} ({e}) — server down or port blocked")
         return False
+    with s:
+        s.sendall(msg)
+        try:
+            reply = s.recv(1024)
+        except TimeoutError:
+            print(f"Connected to {ANTILATCH_HOST}:{ANTILATCH_PORT} and sent ping, "
+                  "but NO REPLY within 5 s.\n"
+                  "The ping reached the server if it printed the message — then either "
+                  "the server crashed handling it (check its console for a traceback) "
+                  "or the network is dropping server->client traffic.")
+            return False
+        except OSError as e:
+            print(f"Connection dropped while waiting for reply ({e})")
+            return False
     if reply == msg:
         print(f"Antilatch server OK at {ANTILATCH_HOST}:{ANTILATCH_PORT} (echo received)")
         return True
