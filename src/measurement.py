@@ -9,7 +9,6 @@ import json
 import os
 import socket
 import sys
-import time
 import datetime
 
 if '--sim' in sys.argv:
@@ -90,7 +89,6 @@ def _acquire_rows(N, total):
     if SIM_MODE:
         done = 0.0
         while total is None or done < total:
-            time.sleep(0.05)
             yield _sim_row(1.0)
             done += 1.0
         return
