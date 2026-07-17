@@ -3,4 +3,3 @@ __pycache__/
 *.pyc
 detector-antilatch-server/
 *.egg-info/
-data/measurement_*.csv
