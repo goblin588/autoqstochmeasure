@@ -192,9 +192,12 @@ def tune_delays(
     with Logic16(coincidence_window=COINCIDENCE_WINDOW, logic_mode=True,
                  integration_window=integration_time) as logic:
         logic.configure(threshold=THRESHOLDS, coincidence_window=COINCIDENCE_WINDOW)
-        for ch in signal_chs:
+        print(f"Tuning {len(signal_chs)} channels, {len(offsets)} points each at "
+              f"{integration_time:.0f} s/point (~{len(signal_chs) * len(offsets) * integration_time:.0f} s total)")
+        for i, ch in enumerate(signal_chs, 1):
             delays = st.delays_for(N)
             current = delays[ch - 1]
+            print(f"[{i}/{len(signal_chs)}] scanning ch{ch} around {current:.0f} ns:", flush=True)
             rates = []
             for off in offsets:
                 delays[ch - 1] = current + off
@@ -203,6 +206,7 @@ def tune_delays(
                     pos_singles=[herald_ch, ch],
                     pos_coincidence=[[herald_ch, ch]])
                 rates.append(c[0] / t if t > 0 else 0.0)
+                print(f"  {current + off:+7.0f} ns: {rates[-1]:8.1f} Hz", flush=True)
             best = float(current + offsets[int(np.argmax(rates))])
             if ch == DUMP_CH:
                 st.DUMP_DELAYS[int(N)] = best
@@ -214,6 +218,7 @@ def tune_delays(
                   f"peak {max(rates):.1f} Hz")
 
         # window check at the tuned delays
+        print("Checking coincidence windows at the tuned delays (3 s)...", flush=True)
         logic.set_delays(st.delays_for(N))
         rate_at = {}
         for window in (3.0, 2.0, 1.0):
