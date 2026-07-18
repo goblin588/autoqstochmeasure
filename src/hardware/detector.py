@@ -1,6 +1,7 @@
 from collections.abc import Sequence
 import json
 import socket
+import threading
 import time
 import clr
 import os
@@ -36,8 +37,10 @@ def reset_detectors():
                 "bias_voltage_list": ANTILATCH_BIAS_VOLTAGES,
             }).encode('utf-8'))
             s.recv(1024)  # wait for ack so we don't resume counting mid-reset
+        return True
     except OSError as e:
         print(f"\nWARNING: antilatch server unreachable ({e}); detectors not reset")
+        return False
 
 
 # Helper function to convert channel to binary code
@@ -63,9 +66,9 @@ class Logic16:
         self._coincidence_window = coincidence_window
         # For antilatch
         self.singles = None
-        self._antilatch_timeslice = 0.100 # 100 miliseconds
         self.antilatch_func = reset_detectors
         self.coincidences = None
+        self._antilatch_thread = None
 
         self.TimerCounter1 = Int32
         self.clear_buffer() 
@@ -104,6 +107,8 @@ class Logic16:
                 self.delays.update({k: v})
                 m = int((v * 1e-9) / self._resolution)
                 self.MyTagger.SetDelay(k, m)
+            # counts in the buffer were taken under the old delays
+            self.clear_buffer()
         else:
             self.delays = {k: default_delay for k in range(1, self._total_channels + 1)}
             self.set_delays(channel_delays=channel_delays)
@@ -133,6 +138,8 @@ class Logic16:
         assert self._logic_mode
         self._coincidence_window = window*1e-9
         self.MyLogic.SetWindowWidth(Int32(int(self._coincidence_window / self._resolution)))
+        # counts in the buffer were taken under the old window
+        self.clear_buffer()
 
     def get_status(self):
         msg = '>>> Logic16 counting card\n'
@@ -180,41 +187,41 @@ class Logic16:
     def read_counts_integrated(self, pos_coincidence, pos_singles, neg_singles=[0]):
         """
         Reads integrated counts over a specified integration window.
-        Handles antilatching by checking for repeated latch events and retrying if necessary.
+        Every count is kept, including latched windows (removed offline in
+        post-selection); a detected latch only triggers an antilatch ping so the
+        detector recovers. The buffer is NOT cleared here, so counts accumulated
+        since the previous read (e.g. the gap between rows) are also included.
         """
         counting_time = 0
         total_c_counts = np.zeros(len(pos_coincidence))
         total_s_counts = np.zeros(len(pos_singles))
         has_latched = 0
-        self.clear_buffer()
 
-        # Instead of reading counts for the entire `counting_time` duration, which can be quite large,
-        # read for a smaller integration time (we call this the "timeslice"). Doing this reduces the
-        # chance of latching events messing up the photon counts.
-        while counting_time <= self._integration_window:
-            time.sleep(self._antilatch_timeslice)
+        # The card counts in hardware during the sleep, so this sleep IS the
+        # integration period, not overhead. Sleeping the *remaining* time gives
+        # exact 1 s rows with no overshoot.
+        while counting_time < self._integration_window:
+            time.sleep(self._integration_window - counting_time)
             c_counts, s_counts, timecounter = self.read_counts(pos_coincidence=pos_coincidence,
                                                                pos_singles=pos_singles,
                                                                neg_singles=neg_singles)
-            antilatch_flags = self.antilatch_check(s_counts)
-            has_latched += antilatch_flags
-
-            # If detectors keep latching, wait for a bit instead of sending another antilatch request.
-            if has_latched > 5:
-                self.antilatch_func()
-                print('WARNING: several latching events in a row, waiting 30 secs.')
-                has_latched = 0
-                time.sleep(30)
-                continue
-            if antilatch_flags > 0:
-                self.antilatch_func()
-                print('.', end='') # Simple way to keep track of antilatch events
-                time.sleep(0.2)
-                self.clear_buffer()
-                continue
-            else:
-                has_latched = 0
             total_c_counts += c_counts
             total_s_counts += s_counts
             counting_time += timecounter * self._resolution
+
+            antilatch_flags = self.antilatch_check(s_counts)
+            if antilatch_flags > 0:
+                # Ping in the background so the readout cadence never stalls on the
+                # server (up to 10 s if unreachable). At most one ping in flight;
+                # if the last one is still running, this window's ping is skipped.
+                if self._antilatch_thread is None or not self._antilatch_thread.is_alive():
+                    self._antilatch_thread = threading.Thread(target=self.antilatch_func, daemon=True)
+                    self._antilatch_thread.start()
+                print('.', end='', flush=True) # Simple way to keep track of antilatch events
+                has_latched += antilatch_flags
+                if has_latched > 5:
+                    print('\nWARNING: several latching events in a row - is the cryostat warm?')
+                    has_latched = 0
+            else:
+                has_latched = 0
         return total_c_counts, total_s_counts, counting_time
