@@ -293,6 +293,7 @@ def main():
             "\t6. Test antilatch server connection\n"
             "\t7. Stream a channel\n"
             "\t8. Tune channel delays (±10 ns local scan + window check)\n"
+            "\t9. Unlatch detectors (antilatch only, card untouched)\n"
             )
 
         match n:
@@ -321,8 +322,17 @@ def main():
                 else:
                     from libraries.countingcard import tune_delays
                     tune_delays(_ask_N())
+            case '9':
+                if SIM_MODE:
+                    print("[SIM MODE] no detectors to unlatch")
+                else:
+                    # reset_detectors only talks to the antilatch server over TCP;
+                    # it never opens the counting card, so another app can keep reading
+                    from hardware.detector import reset_detectors
+                    if reset_detectors():
+                        print("Detectors unlatched (bias voltages cycled)")
             case _:
-                print("Please choose a valid option 1-8 from list:")
+                print("Please choose a valid option 1-9 from list:")
 
 
 if __name__ == "__main__":
