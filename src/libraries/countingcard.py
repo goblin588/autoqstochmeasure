@@ -175,12 +175,15 @@ def tune_delays(
     N,
     step: float = 2.0,
     span: float = 10.0,
-    integration_time: float = 1.0,
+    integration_time: float = 0.25,
     signal_chs: list = DET_CHS,
     herald_ch: int = TRIGG_CH,
 ):
     """Re-centre each signal channel's delay after drift (scan ±span ns in
     `step` ns moves, keep the delay with the highest coincidence rate).
+
+    Scan points only need the argmax, so a short `integration_time` per point
+    suffices; bump it up if a low-rate channel's scan looks like noise.
 
     The best value per channel is written back into settings.CHANNELS /
     settings.DUMP_DELAYS, so delays_for(N) — and every later acquisition this
@@ -196,7 +199,7 @@ def tune_delays(
                  integration_window=integration_time) as logic:
         logic.configure(threshold=THRESHOLDS, coincidence_window=COINCIDENCE_WINDOW)
         print(f"Tuning {len(signal_chs)} channels, {len(offsets)} points each at "
-              f"{integration_time:.0f} s/point (~{len(signal_chs) * len(offsets) * integration_time:.0f} s total)")
+              f"{integration_time:.2g} s/point (~{len(signal_chs) * len(offsets) * integration_time:.0f} s total)")
         for i, ch in enumerate(signal_chs, 1):
             delays = st.delays_for(N)
             current = delays[ch - 1]
@@ -220,7 +223,9 @@ def tune_delays(
             print(f"ch{ch}: {current:.0f} -> {best:.0f} ns ({where}), "
                   f"peak {max(rates):.1f} Hz")
 
-        # window check at the tuned delays
+        # window check at the tuned delays; back to 1 s/point — this sets the
+        # recommended global window, so it gets real stats unlike the scan
+        logic._integration_window = 1.0
         print("Checking coincidence windows at the tuned delays (3 s)...", flush=True)
         logic.set_delays(st.delays_for(N))
         rate_at = {}
