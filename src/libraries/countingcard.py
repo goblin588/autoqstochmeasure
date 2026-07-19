@@ -91,12 +91,15 @@ def stream_herald_and_signal(
         logic.configure(threshold=THRESHOLDS, coincidence_window=coincidence_window, delays=delays)
 
         start_time = time.time()
+        last = time.monotonic()
         while (time.time() - start_time) < duration:
-            c_counts, s_counts, timecounter = logic.read_counts(
+            c_counts, s_counts, _timecounter = logic.read_counts(
                 pos_coincidence=coincidence_chs,
                 pos_singles=singles_chs,
             )
-            delta_t = timecounter * logic._timecounter_unit
+            now = time.monotonic()
+            delta_t = now - last
+            last = now
 
             herald_rate = s_counts[0] / delta_t
             signal_rate = s_counts[1] / delta_t

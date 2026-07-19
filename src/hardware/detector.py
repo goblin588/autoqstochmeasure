@@ -55,8 +55,6 @@ class Logic16:
         self.MyTagger = TTInterface()
         self.MyTagger.Open()
         self._resolution = self.MyTagger.GetResolution()
-        # GetTimeCounter ticks in 5 ns, not tag resolution (was 32x slow/inflated)
-        self._timecounter_unit = 5e-9
         self._logic_mode = False
         if logic_mode:
             self._logic_mode = True
@@ -200,16 +198,18 @@ class Logic16:
         has_latched = 0
 
         # The card counts in hardware during the sleep, so this sleep IS the
-        # integration period, not overhead. Sleeping the *remaining* time gives
-        # exact 1 s rows with no overshoot.
+        # integration period, not overhead. Timed by the PC clock: the card's
+        # TimeCounter tick unit doesn't match GetResolution or the documented
+        # 5 ns (measured ~30x and ~22x off), so we don't trust it for timing.
         while counting_time < self._integration_window:
+            t0 = time.monotonic()
             time.sleep(self._integration_window - counting_time)
-            c_counts, s_counts, timecounter = self.read_counts(pos_coincidence=pos_coincidence,
-                                                               pos_singles=pos_singles,
-                                                               neg_singles=neg_singles)
+            c_counts, s_counts, _timecounter = self.read_counts(pos_coincidence=pos_coincidence,
+                                                                pos_singles=pos_singles,
+                                                                neg_singles=neg_singles)
             total_c_counts += c_counts
             total_s_counts += s_counts
-            counting_time += timecounter * self._timecounter_unit
+            counting_time += time.monotonic() - t0
 
             antilatch_flags = self.antilatch_check(s_counts)
             if antilatch_flags > 0:
