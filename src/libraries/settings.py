@@ -50,13 +50,13 @@ LOOP_CHS = [2, 4, 6, 8]  # loop 1..4
 DUMP_CH = 7
 CHANNELS = {
     3: {'delay': 2841, 'threshold': 0.6},  # herald
-    2: {'delay': 1970, 'threshold': 0.8},  # loop 1
-    4: {'delay': 1541, 'threshold': 0.8},  # loop 2
-    6: {'delay': 1107, 'threshold': 0.8},  # loop 3
-    8: {'delay': 672,  'threshold': 0.8},  # loop 4
+    2: {'delay': 1972, 'threshold': 0.8},  # loop 1
+    4: {'delay': 1547, 'threshold': 0.8},  # loop 2
+    6: {'delay': 1113, 'threshold': 0.8},  # loop 3
+    8: {'delay': 680,  'threshold': 0.8},  # loop 4
     7: {'delay': None, 'threshold': 0.2},  # dump — delay per N from DUMP_DELAYS
 }
-DUMP_DELAYS = {0: 2388, 1: 1949, 2: 1515, 3: 1060, 4: 643}  # keyed by loops completed before dump
+DUMP_DELAYS = {0: 2386, 1: 1947, 2: 1513, 3: 1066, 4: 641}  # keyed by loops completed before dump
 
 THRESHOLDS = {ch: cfg['threshold'] for ch, cfg in CHANNELS.items()}
 
