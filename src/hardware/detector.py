@@ -55,6 +55,8 @@ class Logic16:
         self.MyTagger = TTInterface()
         self.MyTagger.Open()
         self._resolution = self.MyTagger.GetResolution()
+        # GetTimeCounter ticks in 5 ns, not tag resolution (was 32x slow/inflated)
+        self._timecounter_unit = 5e-9
         self._logic_mode = False
         if logic_mode:
             self._logic_mode = True
@@ -207,7 +209,7 @@ class Logic16:
                                                                neg_singles=neg_singles)
             total_c_counts += c_counts
             total_s_counts += s_counts
-            counting_time += timecounter * self._resolution
+            counting_time += timecounter * self._timecounter_unit
 
             antilatch_flags = self.antilatch_check(s_counts)
             if antilatch_flags > 0:
