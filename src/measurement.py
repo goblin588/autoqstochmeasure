@@ -305,10 +305,8 @@ def main():
             case '2':
                 measurement(_ask_N())
             case '3':
-                # Statistics
                 measurement(_ask_N(), performTomo=True)
             case '4':
-                # Statistics with tomo
                 measurement(_ask_N(), allInputs=True)
             case '5':
                 test_detectors()

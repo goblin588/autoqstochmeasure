@@ -96,7 +96,7 @@ def stream_herald_and_signal(
                 pos_coincidence=coincidence_chs,
                 pos_singles=singles_chs,
             )
-            delta_t = timecounter * logic._resolution
+            delta_t = timecounter * logic._timecounter_unit
 
             herald_rate = s_counts[0] / delta_t
             signal_rate = s_counts[1] / delta_t
