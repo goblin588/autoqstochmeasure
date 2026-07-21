@@ -52,9 +52,9 @@ CHANNELS = {
     3:  {'delay': 3841, 'threshold': 0.6},  # herald
     2:  {'delay': 2972, 'threshold': 0.6},  # loop 1
     4:  {'delay': 2542, 'threshold': 0.6},  # loop 2
-    6:  {'delay': 2110, 'threshold': 0.6},  # loop 3
-    8:  {'delay': 1677, 'threshold': 0.6},  # loop 4
-    10: {'delay': 1249, 'threshold': 0.6},  # loop 5
+    6:  {'delay': 2110, 'threshold': 0.8},  # loop 3 — 0.6 read 0 singles, reverted pending retest
+    8:  {'delay': 1677, 'threshold': 0.8},  # loop 4 — 0.6 read 0 singles, reverted pending retest
+    10: {'delay': 1249, 'threshold': 0.8},  # loop 5 — 0.6 read 0 singles, reverted pending retest
     7:  {'delay': 1220, 'threshold': 0.2},  # dump — fixed regardless of N
 }
 
