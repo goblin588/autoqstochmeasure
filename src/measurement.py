@@ -96,16 +96,17 @@ def _acquire_rows(N, total):
     yield from acquire_rows(total, delays=delays_for(N))
 
 def _save_results(rows, N, label):
-    """Write rows to data/measurement_N{N}_s{label}_{timestamp}.csv.
+    """Write rows to data/{timestamp}_measurement_N{N}_s{label}.csv.
 
+    Timestamp leads so filenames sort most-recent-last (ls default order).
     Called from finally — saves whatever rows exist even mid-sweep.
     """
     if not rows:
         print("No data to save")
         return
     os.makedirs('data', exist_ok=True)
-    path = (f"data/measurement_N{N}_s{label}_"
-            f"{datetime.datetime.now():%Y%m%d_%H%M%S}.csv")
+    path = (f"data/{datetime.datetime.now():%Y%m%d_%H%M%S}_"
+            f"measurement_N{N}_s{label}.csv")
     fields = list(dict.fromkeys(k for r in rows for k in r))
     with open(path, 'w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=fields)
