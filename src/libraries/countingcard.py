@@ -172,7 +172,6 @@ def stream_channels_with_delays(
 
 
 def tune_delays(
-    N,
     step: float = 2.0,
     span: float = 10.0,
     integration_time: float = 0.25,
@@ -185,10 +184,10 @@ def tune_delays(
     Scan points only need the argmax, so a short `integration_time` per point
     suffices; bump it up if a low-rate channel's scan looks like noise.
 
-    The best value per channel is written back into settings.CHANNELS /
-    settings.DUMP_DELAYS, so delays_for(N) — and every later acquisition this
-    session — uses the tuned values. Answer y at the prompt to persist them
-    to calibration.json (loaded over the hardcoded defaults on import).
+    The best value per channel is written back into settings.CHANNELS, so
+    delays_for() — and every later acquisition this session — uses the tuned
+    values. Answer y at the prompt to persist them to calibration.json
+    (loaded over the hardcoded defaults on import).
 
     Finishes with a coincidence-window check at 3/2/1 ns and recommends the
     smallest window that keeps >=90% of the 3 ns rate.
@@ -201,7 +200,7 @@ def tune_delays(
         print(f"Tuning {len(signal_chs)} channels, {len(offsets)} points each at "
               f"{integration_time:.2g} s/point (~{len(signal_chs) * len(offsets) * integration_time:.0f} s total)")
         for i, ch in enumerate(signal_chs, 1):
-            delays = st.delays_for(N)
+            delays = st.delays_for()
             current = delays[ch - 1]
             print(f"[{i}/{len(signal_chs)}] scanning ch{ch} around {current:.0f} ns:", flush=True)
             rates = []
@@ -214,20 +213,15 @@ def tune_delays(
                 rates.append(c[0] / t if t > 0 else 0.0)
                 print(f"  {current + off:+7.0f} ns: {rates[-1]:8.1f} Hz", flush=True)
             best = float(current + offsets[int(np.argmax(rates))])
-            if ch == DUMP_CH:
-                st.DUMP_DELAYS[int(N)] = best
-                where = f'DUMP_DELAYS[{int(N)}]'
-            else:
-                st.CHANNELS[ch]['delay'] = best
-                where = f'CHANNELS[{ch}]'
-            print(f"ch{ch}: {current:.0f} -> {best:.0f} ns ({where}), "
+            st.CHANNELS[ch]['delay'] = best
+            print(f"ch{ch}: {current:.0f} -> {best:.0f} ns (CHANNELS[{ch}]), "
                   f"peak {max(rates):.1f} Hz")
 
         # window check at the tuned delays; back to 1 s/point — this sets the
         # recommended global window, so it gets real stats unlike the scan
         logic._integration_window = 1.0
         print("Checking coincidence windows at the tuned delays (3 s)...", flush=True)
-        logic.set_delays(st.delays_for(N))
+        logic.set_delays(st.delays_for())
         rate_at = {}
         for window in (3.0, 2.0, 1.0):
             logic.set_coincidence_window(window)

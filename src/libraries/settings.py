@@ -41,22 +41,22 @@ for _name, _cfg in WAVEPLATES.items():
 
 
 # CC CHANNELS: delay (ns) + input threshold (V) per channel.
-# Herald on ch3; loop-k "1" outputs on ch2/4/6/8; dump on ch7.
-# Loop-channel delays are fixed regardless of process length; only the dump
-# delay changes — a photon dumped for process N is dumped on the (N+1)th
-# loop, having completed N loops, so its delay comes from DUMP_DELAYS.
+# Herald on ch3; loop-k "1" outputs on ch2/4/6/8/10; dump on ch7.
+# All delays are fixed regardless of process length now, including the dump
+# — it's parked at its max-loop timing instead of switching per N — so every
+# loop channel can be measured in one run without knowing the unitary length.
 TRIGG_CH = 3
-LOOP_CHS = [2, 4, 6, 8]  # loop 1..4
+LOOP_CHS = [2, 4, 6, 8, 10]  # loop 1..5
 DUMP_CH = 7
 CHANNELS = {
-    3: {'delay': 2841, 'threshold': 0.6},  # herald
-    2: {'delay': 1970, 'threshold': 0.8},  # loop 1
-    4: {'delay': 1541, 'threshold': 0.8},  # loop 2
-    6: {'delay': 1107, 'threshold': 0.8},  # loop 3
-    8: {'delay': 672,  'threshold': 0.8},  # loop 4
-    7: {'delay': None, 'threshold': 0.2},  # dump — delay per N from DUMP_DELAYS
+    3:  {'delay': 3841, 'threshold': 0.6},  # herald
+    2:  {'delay': 2972, 'threshold': 0.8},  # loop 1
+    4:  {'delay': 2542, 'threshold': 0.8},  # loop 2
+    6:  {'delay': 2110, 'threshold': 0.8},  # loop 3
+    8:  {'delay': 1677, 'threshold': 0.8},  # loop 4
+    10: {'delay': 1249, 'threshold': 0.8},  # loop 5
+    7:  {'delay': 1220, 'threshold': 0.2},  # dump — fixed, parked (excluded from DET_CHS)
 }
-DUMP_DELAYS = {0: 2388, 1: 1949, 2: 1515, 3: 1060, 4: 643}  # keyed by loops completed before dump
 
 THRESHOLDS = {ch: cfg['threshold'] for ch, cfg in CHANNELS.items()}
 
@@ -67,28 +67,24 @@ if CAL_FILE.exists():
     _cal = json.loads(CAL_FILE.read_text())
     for _ch, _delay in _cal['channel_delays'].items():
         CHANNELS[int(_ch)]['delay'] = _delay
-    DUMP_DELAYS.update({int(k): v for k, v in _cal['dump_delays'].items()})
 
 def save_calibration():
     """Persist the current (tuned) delays; loaded over the defaults on import."""
     CAL_FILE.write_text(json.dumps({
-        'channel_delays': {ch: cfg['delay'] for ch, cfg in CHANNELS.items()
-                           if cfg['delay'] is not None},
-        'dump_delays': DUMP_DELAYS,
+        'channel_delays': {ch: cfg['delay'] for ch, cfg in CHANNELS.items()},
     }, indent=1))
     print(f"Saved calibration -> {CAL_FILE}")
 
-def delays_for(N):
-    """Full 8-channel delay list for process length N (dump = N-loop dump)."""
-    d = [0.0] * 8
+def delays_for(N=None):
+    """Full delay list, every channel fixed. N is accepted (and ignored) so
+    existing call sites that still pass a unitary N keep working unchanged."""
+    d = [0.0] * max(CHANNELS)
     for ch, cfg in CHANNELS.items():
-        if cfg['delay'] is not None:
-            d[ch - 1] = cfg['delay']
-    d[DUMP_CH - 1] = DUMP_DELAYS[int(N)]
+        d[ch - 1] = cfg['delay']
     return d
 
-DELAYS = delays_for(3)  # generic default for diagnostics; measurement passes delays_for(N)
-DET_CHS = [*LOOP_CHS, DUMP_CH]
+DELAYS = delays_for()
+DET_CHS = LOOP_CHS  # dump excluded — fixed/parked, not part of the coincidence set
 
 SINGLE_DET_CHS = [TRIGG_CH, *DET_CHS]
 COINCIDENCE_CHS = [[TRIGG_CH, ch] for ch in DET_CHS]
