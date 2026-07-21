@@ -55,7 +55,7 @@ CHANNELS = {
     6:  {'delay': 2110, 'threshold': 0.8},  # loop 3
     8:  {'delay': 1677, 'threshold': 0.8},  # loop 4
     10: {'delay': 1249, 'threshold': 0.8},  # loop 5
-    7:  {'delay': 1220, 'threshold': 0.2},  # dump — fixed, parked (excluded from DET_CHS)
+    7:  {'delay': 1220, 'threshold': 0.2},  # dump — fixed regardless of N
 }
 
 THRESHOLDS = {ch: cfg['threshold'] for ch, cfg in CHANNELS.items()}
@@ -84,7 +84,7 @@ def delays_for(N=None):
     return d
 
 DELAYS = delays_for()
-DET_CHS = LOOP_CHS  # dump excluded — fixed/parked, not part of the coincidence set
+DET_CHS = [*LOOP_CHS, DUMP_CH]
 
 SINGLE_DET_CHS = [TRIGG_CH, *DET_CHS]
 COINCIDENCE_CHS = [[TRIGG_CH, ch] for ch in DET_CHS]
