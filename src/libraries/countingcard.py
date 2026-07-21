@@ -173,16 +173,23 @@ def stream_channels_with_delays(
 
 def tune_delays(
     step: float = 2.0,
-    span: float = 10.0,
+    span: float = 50.0,
     integration_time: float = 0.25,
     signal_chs: list = LOOP_CHS,  # dump is fixed at 1220, not scanned by default
     herald_ch: int = TRIGG_CH,
+    min_counts: float = 10,
+    background_offset: float = -30.0,
+    background_samples: int = 10,
 ):
     """Re-centre each signal channel's delay after drift (scan ±span ns in
-    `step` ns moves, keep the delay with the highest coincidence rate).
+    `step` ns moves, keep the delay with the highest coincidence count).
 
-    Scan points only need the argmax, so a short `integration_time` per point
-    suffices; bump it up if a low-rate channel's scan looks like noise.
+    ch2 is scanned first as a reference. Once its peak is found, background
+    is measured `background_offset` ns off that peak (averaged over
+    `background_samples` reads at the same integration_time) and used as the
+    minimum-count bar every channel's peak must clear to be accepted —
+    `min_counts` is just a floor in case the background comes out near zero.
+    A channel whose peak doesn't clear the bar is left at its current delay.
 
     The best value per channel is written back into settings.CHANNELS, so
     delays_for() — and every later acquisition this session — uses the tuned
@@ -194,28 +201,57 @@ def tune_delays(
     """
     import libraries.settings as st
     offsets = np.arange(-span, span + step / 2, step)
+    ref_ch = 2 if 2 in signal_chs else signal_chs[0]
+    order = [ref_ch, *[ch for ch in signal_chs if ch != ref_ch]]
+    min_bar = None
+    background = None
     with Logic16(coincidence_window=COINCIDENCE_WINDOW, logic_mode=True,
                  integration_window=integration_time) as logic:
         logic.configure(threshold=THRESHOLDS, coincidence_window=COINCIDENCE_WINDOW)
-        print(f"Tuning {len(signal_chs)} channels, {len(offsets)} points each at "
-              f"{integration_time:.2g} s/point (~{len(signal_chs) * len(offsets) * integration_time:.0f} s total)")
-        for i, ch in enumerate(signal_chs, 1):
+        total_s = len(order) * len(offsets) * integration_time + background_samples * integration_time
+        print(f"Tuning {len(order)} channels, {len(offsets)} points each at "
+              f"{integration_time:.2g} s/point (~{total_s:.0f} s total)")
+        for i, ch in enumerate(order, 1):
             delays = st.delays_for()
             current = delays[ch - 1]
-            print(f"[{i}/{len(signal_chs)}] scanning ch{ch} around {current:.0f} ns:", flush=True)
-            rates = []
+            print(f"[{i}/{len(order)}] scanning ch{ch} around {current:.0f} ns:", flush=True)
+            counts = []
             for off in offsets:
                 delays[ch - 1] = current + off
                 logic.set_delays(delays)
                 c, _s, t = logic.read_counts_integrated(
                     pos_singles=[herald_ch, ch],
                     pos_coincidence=[[herald_ch, ch]])
-                rates.append(c[0] / t if t > 0 else 0.0)
-                print(f"  {current + off:+7.0f} ns: {rates[-1]:8.1f} Hz", flush=True)
-            best = float(current + offsets[int(np.argmax(rates))])
+                counts.append(c[0])
+                rate = c[0] / t if t > 0 else 0.0
+                print(f"  {current + off:+7.0f} ns: {c[0]:6.0f} counts ({rate:7.1f} Hz)", flush=True)
+            counts = np.array(counts)
+            best_idx = int(np.argmax(counts))
+            best = float(current + offsets[best_idx])
+            peak_counts = float(counts[best_idx])
+
+            if ch == ref_ch:
+                bg_delays = st.delays_for()
+                bg_delays[ch - 1] = best + background_offset
+                logic.set_delays(bg_delays)
+                bg_counts = []
+                for _ in range(background_samples):
+                    c, _s, t = logic.read_counts_integrated(
+                        pos_singles=[herald_ch, ch], pos_coincidence=[[herald_ch, ch]])
+                    bg_counts.append(c[0])
+                background = float(np.mean(bg_counts))
+                min_bar = max(min_counts, background)
+                print(f"  background @ {best + background_offset:+.0f} ns "
+                      f"(avg of {background_samples}): {background:.1f} counts "
+                      f"-> minimum-count bar = {min_bar:.1f}", flush=True)
+
+            if peak_counts < min_bar:
+                print(f"ch{ch}: peak {peak_counts:.0f} counts below the {min_bar:.1f} bar — "
+                      f"no clear signal, delay left at {current:.0f} ns")
+                continue
             st.CHANNELS[ch]['delay'] = best
             print(f"ch{ch}: {current:.0f} -> {best:.0f} ns (CHANNELS[{ch}]), "
-                  f"peak {max(rates):.1f} Hz")
+                  f"peak {peak_counts:.0f} counts")
 
         # window check at the tuned delays; back to 1 s/point — this sets the
         # recommended global window, so it gets real stats unlike the scan
@@ -233,6 +269,9 @@ def tune_delays(
     best_window = min(w for w in rate_at if rate_at[w] >= 0.9 * rate_at[3.0])
     print(f"Recommended COINCIDENCE_WINDOW = {best_window:.0f} ns "
           f"(session still uses {COINCIDENCE_WINDOW} ns; edit settings.py to change)")
+    print(f"Background used for minimum-count bar: {background:.1f} counts/"
+          f"{integration_time:.2g}s (avg of {background_samples} samples, "
+          f"ch{ref_ch} at {background_offset:+.0f} ns off its peak) -> bar = {min_bar:.1f}")
     if input("Save tuned delays as new defaults? [y/N] ").strip().lower() == 'y':
         st.save_calibration()
     else:
