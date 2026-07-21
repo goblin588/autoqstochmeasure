@@ -1,5 +1,5 @@
 from hardware.detector import Logic16
-from libraries.settings import TRIGG_CH, DET_CHS, DUMP_CH, COINCIDENCE_WINDOW, DELAYS, THRESHOLDS
+from libraries.settings import TRIGG_CH, DET_CHS, DUMP_CH, LOOP_CHS, COINCIDENCE_WINDOW, DELAYS, THRESHOLDS
 import time
 import numpy as np
 
@@ -175,7 +175,7 @@ def tune_delays(
     step: float = 2.0,
     span: float = 10.0,
     integration_time: float = 0.25,
-    signal_chs: list = DET_CHS,
+    signal_chs: list = LOOP_CHS,  # dump is fixed at 1220, not scanned by default
     herald_ch: int = TRIGG_CH,
 ):
     """Re-centre each signal channel's delay after drift (scan ±span ns in
