@@ -188,8 +188,8 @@ def test_detectors(N='3', duration=2.0):
     """Short acquisition; report whether the chosen channels see counts.
 
     Asks which channels to check (some legitimately sit dark depending on
-    the process), Enter = all. N only sets the dump delay, which doesn't
-    affect the singles check — any valid N works, so the caller isn't asked."""
+    the process), Enter = all. Delays are fixed now, so N is unused — kept
+    for signature compatibility."""
     names = {TRIGG_CH: 'herald', **{ch: f'singles_ch{ch}' for ch in DET_CHS}}
     raw = input(f"Channels to test ({TRIGG_CH}=herald, "
                 f"{', '.join(map(str, DET_CHS))}; Enter = all): ").strip()
@@ -218,9 +218,8 @@ def test_detectors(N='3', duration=2.0):
 
 
 def read_outputs(duration=20.0):
-    """Stream one output channel live: singles + coincidences with the herald,
-    using the correct delay. Only the dump delay depends on the process, so
-    the unitary N is asked only when streaming the dump."""
+    """Stream one output channel live: singles + coincidences with the herald.
+    All delays are fixed now, so no unitary N is needed."""
     labels = {TRIGG_CH: 'herald',
               **{ch: f'loop{i + 1}' for i, ch in enumerate(LOOP_CHS)}, DUMP_CH: 'dump'}
     menu = ', '.join(f'{ch}={label}' for ch, label in labels.items())
@@ -231,12 +230,11 @@ def read_outputs(duration=20.0):
     except (ValueError, KeyError):
         print(f"Pick a channel number from: {menu}")
         return
-    N = _ask_N() if ch == DUMP_CH else '3'
     if SIM_MODE:
-        print(f"[SIM MODE] would stream ch{ch} ({labels[ch]}) with delays {delays_for(N)}")
+        print(f"[SIM MODE] would stream ch{ch} ({labels[ch]}) with delays {delays_for()}")
         return
     from libraries.countingcard import stream_herald_and_signal
-    stream_herald_and_signal(signal_ch=ch, duration=duration, delays=delays_for(N))
+    stream_herald_and_signal(signal_ch=ch, duration=duration, delays=delays_for())
 
 
 def ping_antilatch():
@@ -319,7 +317,7 @@ def main():
                     print("[SIM MODE] delay tuning needs hardware")
                 else:
                     from libraries.countingcard import tune_delays
-                    tune_delays(_ask_N())
+                    tune_delays()
             case '9':
                 if SIM_MODE:
                     print("[SIM MODE] no detectors to unlatch")
