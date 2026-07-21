@@ -220,12 +220,13 @@ def tune_delays(
             for off in offsets:
                 delays[ch - 1] = current + off
                 logic.set_delays(delays)
-                c, _s, t = logic.read_counts_integrated(
+                c, s, t = logic.read_counts_integrated(
                     pos_singles=[herald_ch, ch],
                     pos_coincidence=[[herald_ch, ch]])
                 counts.append(c[0])
                 rate = c[0] / t if t > 0 else 0.0
-                print(f"  {current + off:+7.0f} ns: {c[0]:6.0f} counts ({rate:7.1f} Hz)", flush=True)
+                print(f"  {current + off:+7.0f} ns: {c[0]:6.0f} coinc ({rate:7.1f} Hz)  "
+                      f"herald {s[0]:6.0f}  ch{ch} {s[1]:6.0f}", flush=True)
             counts = np.array(counts)
             best_idx = int(np.argmax(counts))
             best = float(current + offsets[best_idx])
