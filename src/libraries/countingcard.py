@@ -205,6 +205,7 @@ def tune_delays(
     order = [ref_ch, *[ch for ch in signal_chs if ch != ref_ch]]
     min_bar = None
     background = None
+    changes = {}
     with Logic16(coincidence_window=COINCIDENCE_WINDOW, logic_mode=True,
                  integration_window=integration_time) as logic:
         logic.configure(threshold=THRESHOLDS, coincidence_window=COINCIDENCE_WINDOW)
@@ -248,10 +249,12 @@ def tune_delays(
             if peak_counts < min_bar:
                 print(f"ch{ch}: peak {peak_counts:.0f} counts below the {min_bar:.1f} bar — "
                       f"no clear signal, delay left at {current:.0f} ns")
+                changes[ch] = (current, current)
                 continue
             st.CHANNELS[ch]['delay'] = best
             print(f"ch{ch}: {current:.0f} -> {best:.0f} ns (CHANNELS[{ch}]), "
                   f"peak {peak_counts:.0f} counts")
+            changes[ch] = (current, best)
 
         # window check at the tuned delays; back to 1 s/point — this sets the
         # recommended global window, so it gets real stats unlike the scan
@@ -272,6 +275,11 @@ def tune_delays(
     print(f"Background used for minimum-count bar: {background:.1f} counts/"
           f"{integration_time:.2g}s (avg of {background_samples} samples, "
           f"ch{ref_ch} at {background_offset:+.0f} ns off its peak) -> bar = {min_bar:.1f}")
+    print("Delay summary (before -> after):")
+    for ch in order:
+        before, after = changes[ch]
+        note = " (updated)" if after != before else " (unchanged)"
+        print(f"  ch{ch}: {before:.0f} ns -> {after:.0f} ns{note}")
     if input("Save tuned delays as new defaults? [y/N] ").strip().lower() == 'y':
         st.save_calibration()
     else:
