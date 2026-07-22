@@ -57,11 +57,11 @@ CHANNELS = {
     10: {'delay': 1249, 'threshold': 0.4},  # loop 5
     7:  {'delay': 1220, 'threshold': 0.2},  # dump — fixed regardless of N
 }
-# Dump delay for 0 loops (straight to dump, never entered the loop) — the
-# "Dump After" value for the herald row of the calibration table. Used for
-# path-2 (dump-arm) gate tomography; CHANNELS[DUMP_CH]['delay'] is swapped to
-# this temporarily and restored after.
-DUMP_STRAIGHT_DELAY = 3385
+# Dump delay for "dump after 1 loop" — the "Dump After" value for the loop-1
+# row of the calibration table, pairing with path 1's ch2 (loop-1) reading.
+# Used for path-2 (dump-arm) gate tomography; CHANNELS[DUMP_CH]['delay'] is
+# swapped to this temporarily and restored after.
+DUMP_TOMO_DELAY = 2952
 
 THRESHOLDS = {ch: cfg['threshold'] for ch, cfg in CHANNELS.items()}
 
