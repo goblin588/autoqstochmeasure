@@ -289,6 +289,7 @@ def perform_tomo():
         "\t2. HVADRL (6 generic polarisation bases)\n"
         "\t3. Sj (single process state s0)\n"
         "\t4. Sall (every process state s_j for this N)\n"
+        "\t5. Single basis (H/V/A/D/R/L)\n"
         "> ").strip()
     if choice == '1':
         labels, set_input = tl.HVAD_BASES, _set_input_basis
@@ -298,8 +299,14 @@ def perform_tomo():
         js = _input_states(N) if choice == '4' else [0]
         labels = tuple(f's{j}_{N}' for j in js)
         set_input = lambda label: _set_input_state(N, int(label.split('_')[0][1:]))
+    elif choice == '5':
+        basis = _ask_basis("Which basis?")
+        if basis is None:
+            print("Invalid basis choice")
+            return
+        labels, set_input = (basis,), _set_input_basis
     else:
-        print("Invalid choice — pick 1-4")
+        print("Invalid choice — pick 1-5")
         return
 
     path_choice = input(
@@ -365,9 +372,12 @@ def read_outputs(duration=None):
 
 
 def _ask_basis(prompt):
-    """Numbered H/V/A/D/R/L picker. Returns the basis letter, or None."""
+    """H/V/A/D/R/L picker — type the number or the letter itself.
+    Returns the basis letter, or None."""
     menu = '\n'.join(f'\t{i}. {b}' for i, b in enumerate(tl.FULL_BASES, 1))
-    choice = input(f"{prompt}\n{menu}\n> ").strip()
+    choice = input(f"{prompt}\n{menu}\n> ").strip().upper()
+    if choice in tl.FULL_BASES:
+        return choice
     try:
         return tl.FULL_BASES[int(choice) - 1]
     except (ValueError, IndexError):
