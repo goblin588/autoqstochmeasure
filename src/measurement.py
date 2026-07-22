@@ -8,6 +8,7 @@ import csv
 import json
 import os
 import socket
+import subprocess
 import sys
 import datetime
 import time
@@ -116,8 +117,22 @@ def _acquire_rows(N, total):
     from libraries.countingcard import acquire_rows
     yield from acquire_rows(total, delays=delays_for(N))
 
+def _git_commit():
+    """Best-effort short git commit hash of the running code, for
+    reproducibility. None if git isn't available (e.g. not a checkout)."""
+    try:
+        result = subprocess.run(['git', 'rev-parse', '--short', 'HEAD'],
+                                cwd=os.path.dirname(os.path.abspath(__file__)),
+                                capture_output=True, text=True, timeout=2)
+        return result.stdout.strip() or None
+    except Exception:
+        return None
+
+
 def _save_results(rows, N, label):
-    """Write rows to data/{timestamp}_measurement_N{N}_s{label}.csv.
+    """Write rows to data/{timestamp}_measurement_N{N}_s{label}.csv, plus a
+    same-named .json sidecar recording the delays/thresholds/etc. in effect
+    for the run — so old data stays interpretable after later recalibration.
 
     Timestamp leads so filenames sort most-recent-last (ls default order).
     Called from finally — saves whatever rows exist even mid-sweep.
@@ -126,14 +141,30 @@ def _save_results(rows, N, label):
         print("No data to save")
         return
     os.makedirs('data', exist_ok=True)
-    path = (f"data/{datetime.datetime.now():%Y%m%d_%H%M%S}_"
-            f"measurement_N{N}_s{label}.csv")
+    stem = f"data/{datetime.datetime.now():%Y%m%d_%H%M%S}_measurement_N{N}_s{label}"
     fields = list(dict.fromkeys(k for r in rows for k in r))
-    with open(path, 'w', newline='') as f:
+    with open(f"{stem}.csv", 'w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         writer.writerows(rows)
-    print(f"Saved {len(rows)} rows -> {path}")
+
+    meta = {
+        'N': N,
+        'label': label,
+        'delays_ns': delays_for(N),
+        'thresholds_v': st.THRESHOLDS,
+        'coincidence_window_ns': st.COINCIDENCE_WINDOW,
+        'det_chs': DET_CHS,
+        'dump_ch': DUMP_CH,
+        'trigg_ch': TRIGG_CH,
+        'sim_mode': SIM_MODE,
+        'git_commit': _git_commit(),
+        'saved_at': datetime.datetime.now().isoformat(),
+    }
+    with open(f"{stem}.json", 'w') as f:
+        json.dump(meta, f, indent=1)
+
+    print(f"Saved {len(rows)} rows -> {stem}.csv (+ {stem}.json)")
 
 def _input_states(N):
     """All j's with a defined input state for process N.
