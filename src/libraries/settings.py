@@ -57,11 +57,13 @@ CHANNELS = {
     10: {'delay': 1249, 'threshold': 0.4},  # loop 5
     7:  {'delay': 1220, 'threshold': 0.2},  # dump — fixed regardless of N
 }
-# Dump delay for "dump after 1 loop" — the "Dump After" value for the loop-1
-# row of the calibration table, pairing with path 1's ch2 (loop-1) reading.
-# Used for path-2 (dump-arm) gate tomography; CHANNELS[DUMP_CH]['delay'] is
-# swapped to this temporarily and restored after.
-DUMP_TOMO_DELAY = 2952
+# "Dump After" column of the calibration table — dump channel delay if the
+# photon is dumped having completed k loops (0 = herald row, straight to
+# dump). Used for path-2 (dump-arm) gate tomography, paired with whichever
+# loop path 1 is reading (currently always loop 1/ch2, DUMP_DELAYS[1]);
+# CHANNELS[DUMP_CH]['delay'] is swapped to DUMP_DELAYS[k] temporarily and
+# restored after.
+DUMP_DELAYS = {0: 3385, 1: 2952, 2: 2519, 3: 2084, 4: 1650, 5: 1220}
 
 THRESHOLDS = {ch: cfg['threshold'] for ch, cfg in CHANNELS.items()}
 
