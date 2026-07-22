@@ -57,6 +57,11 @@ CHANNELS = {
     10: {'delay': 1249, 'threshold': 0.4},  # loop 5
     7:  {'delay': 1220, 'threshold': 0.2},  # dump — fixed regardless of N
 }
+# Dump delay for 0 loops (straight to dump, never entered the loop) — the
+# "Dump After" value for the herald row of the calibration table. Used for
+# path-2 (dump-arm) gate tomography; CHANNELS[DUMP_CH]['delay'] is swapped to
+# this temporarily and restored after.
+DUMP_STRAIGHT_DELAY = 3385
 
 THRESHOLDS = {ch: cfg['threshold'] for ch, cfg in CHANNELS.items()}
 
@@ -97,4 +102,4 @@ COINCIDENCE_WINDOW = 2.0  # ns — keep within 1-3; tune_delays' window check re
 ANTILATCH_HOST = '10.126.251.233'  # blue-box PC
 ANTILATCH_PORT = 65201
 ANTILATCH_DEVICE_IDS = [0]
-ANTILATCH_BIAS_VOLTAGES = [{0: 4, 1: 4.45, 2: 0.23, 3: 3.45}]
+ANTILATCH_BIAS_VOLTAGES = [{0: 4, 1: 4.45, 2: 0.23, 3: 3.6}]
