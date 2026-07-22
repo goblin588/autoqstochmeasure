@@ -10,6 +10,7 @@ import os
 import socket
 import sys
 import datetime
+import time
 
 if '--sim' in sys.argv:
     os.environ['AUTOTOMO_SIM'] = '1'
@@ -57,6 +58,16 @@ def _set_input_state(N, j=0):
 
 def _beep():
     print('\a', end='', flush=True)
+
+def _play_tune():
+    """A little jingle for long runs finishing. winsound is Windows-only
+    stdlib; no-ops silently anywhere else (sim machine, lab PC off Windows)."""
+    try:
+        import winsound
+    except ImportError:
+        return
+    for freq, ms in [(523, 150), (659, 150), (784, 150), (1046, 300)]:
+        winsound.Beep(freq, ms)
 
 def _set_unitary(N):
     _set_fixed_waveplates(unitaries_angles[N])
@@ -148,6 +159,7 @@ def measurement(N, performTomo=False, allInputs=False):
     """
     total = _ask_duration()
     _set_unitary(N)
+    start = time.monotonic()
 
     js = _input_states(N) if allInputs else [0]
     bases = ['H', 'V', 'A', 'D', 'R', 'L'] if performTomo else [None]
@@ -174,6 +186,8 @@ def measurement(N, performTomo=False, allInputs=False):
         _save_results(rows, N, 'all' if allInputs else 0)
         notify(f"Measurement N={N} done ({len(rows)} rows)",
                title="Measurement Complete", priority="high")
+        if time.monotonic() - start > 300:
+            _play_tune()
     return rows
 
 
