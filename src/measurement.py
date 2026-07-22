@@ -415,6 +415,32 @@ def _ask_basis(prompt):
         return None
 
 
+def _ask_input_label(N, prompt="Input?"):
+    """Single input selector: an H/V/A/D/R/L basis or a process state s_j.
+    Returns (label, set_input) — set_input(label) drives HWP_IN/QWP_IN to
+    it — or (None, None) on an invalid choice."""
+    choice = input(
+        f"{prompt}\n"
+        "\t1. H/V/A/D/R/L basis\n"
+        "\t2. Process state s_j\n"
+        "> ").strip()
+    if choice == '1':
+        basis = _ask_basis("Which basis?")
+        return (basis, _set_input_basis) if basis is not None else (None, None)
+    if choice == '2':
+        js = _input_states(N)
+        j = input(f"Which j? ({', '.join(map(str, js))}): ").strip()
+        try:
+            j = int(j)
+        except ValueError:
+            return None, None
+        label = f's{j}_{N}'
+        if label not in process_state_angles:
+            return None, None
+        return label, lambda label: _set_input_state(N, int(label.split('_')[0][1:]))
+    return None, None
+
+
 def check_projector():
     """Set one input/output basis pair on a chosen path and stream the live
     coincidence rate — for phase tuning after a tomo run: e.g. D in, L out,
@@ -430,31 +456,31 @@ def check_projector():
         return
     path = int(path_choice)
 
-    in_basis = _ask_basis("Input basis?")
+    in_label, set_input = _ask_input_label(N, "Input?")
     out_basis = _ask_basis("Output basis?")
-    if in_basis is None or out_basis is None:
-        print("Invalid basis choice")
+    if in_label is None or out_basis is None:
+        print("Invalid choice")
         return
 
     d = input("Stream duration in seconds (Enter = stream until Ctrl-C): ").strip()
     duration = float(d) if d else None
 
     _set_fixed_waveplates(unitaries_angles[N], path=path)
-    _set_input_basis(in_basis)
+    set_input(in_label)
 
     if path == 1:
         _set_tomo_stages(HWP=HWP_TOM_1, QWP=QWP_TOM_1, basis=out_basis)
-        print(f"|{in_basis}> in, |{out_basis}> out, path 1 (ch{LOOP_CHS[0]}) — streaming")
-        _stream_channel(LOOP_CHS[0], duration, label=f'{in_basis}in_{out_basis}out_path1')
+        print(f"|{in_label}> in, |{out_basis}> out, path 1 (ch{LOOP_CHS[0]}) — streaming")
+        _stream_channel(LOOP_CHS[0], duration, label=f'{in_label}in_{out_basis}out_path1')
         return
 
     _set_tomo_stages(HWP=HWP_OUT_2, QWP=QWP_OUT_2, basis=out_basis)
     normal_dump_delay = st.CHANNELS[DUMP_CH]['delay']
     st.CHANNELS[DUMP_CH]['delay'] = st.DUMP_DELAYS[1]
     print(f"Dump delay set to {st.DUMP_DELAYS[1]} ns (dump-after-1-loop, path 2)")
-    print(f"|{in_basis}> in, |{out_basis}> out, path 2 (dump) — streaming")
+    print(f"|{in_label}> in, |{out_basis}> out, path 2 (dump) — streaming")
     try:
-        _stream_channel(DUMP_CH, duration, label=f'{in_basis}in_{out_basis}out_path2')
+        _stream_channel(DUMP_CH, duration, label=f'{in_label}in_{out_basis}out_path2')
     finally:
         st.CHANNELS[DUMP_CH]['delay'] = normal_dump_delay
         print(f"Dump delay restored to {normal_dump_delay} ns")
