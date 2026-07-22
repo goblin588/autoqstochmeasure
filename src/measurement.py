@@ -248,18 +248,18 @@ def _tomo_path1(N, labels, set_input, duration):
     return data
 
 
-def _tomo_path2(N, labels, set_input, duration):
+def _tomo_path2(N, labels, set_input, duration, loop=1):
     """dump (ch7) via OUT_2 — a polariser sits behind the OUT_2 plates in
     that arm, so OUT_2 is the correct analyzer here (not TOM_DUMP, a
     separate stage pair); getUnitary(path=2) already excludes hf2/qf2 from
     U to match. TOM_1 is fixed at the U-angle for this pass, and dump's
-    delay is swapped to the "dump after 1 loop" value (pairs with path 1's
+    delay is swapped to DUMP_DELAYS[loop] (loop=1 pairs with path 1's
     ch2/loop-1 reading) for the duration, then restored.
     Returns {input_label: {output_basis: (count, err)}}."""
     _set_fixed_waveplates(unitaries_angles[N], path=2)
     normal_dump_delay = st.CHANNELS[DUMP_CH]['delay']
-    st.CHANNELS[DUMP_CH]['delay'] = st.DUMP_TOMO_DELAY
-    print(f"Dump delay set to {st.DUMP_TOMO_DELAY} ns (dump-after-1-loop, path 2)")
+    st.CHANNELS[DUMP_CH]['delay'] = st.DUMP_DELAYS[loop]
+    print(f"Dump delay set to {st.DUMP_DELAYS[loop]} ns (dump-after-{loop}-loop, path 2)")
     data = {}
     try:
         for label in labels:
