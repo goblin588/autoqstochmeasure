@@ -235,24 +235,52 @@ def _sweep_output_bases(HWP, QWP, N, duration, channel):
     return data
 
 
+def _tomo_path1(N, labels, set_input, duration):
+    """ch2 via TOM_1, OUT_2 fixed at the U-angle — the gate output that
+    feeds the loop. Returns {input_label: {output_basis: (count, err)}}."""
+    _set_fixed_waveplates(unitaries_angles[N], path=1)
+    _beep()
+    data = {}
+    for label in labels:
+        print(f"\n=== Path 1 (ch{LOOP_CHS[0]}) | Input |{label}> ===")
+        set_input(label)
+        data[label] = _sweep_output_bases(HWP_TOM_1, QWP_TOM_1, N, duration, LOOP_CHS[0])
+    return data
+
+
+def _tomo_path2(N, labels, set_input, duration):
+    """dump (ch7) via OUT_2 — a polariser sits behind the OUT_2 plates in
+    that arm, so OUT_2 is the correct analyzer here (not TOM_DUMP, a
+    separate stage pair); getUnitary(path=2) already excludes hf2/qf2 from
+    U to match. TOM_1 is fixed at the U-angle for this pass, and dump's
+    delay is swapped to the "dump after 1 loop" value (pairs with path 1's
+    ch2/loop-1 reading) for the duration, then restored.
+    Returns {input_label: {output_basis: (count, err)}}."""
+    _set_fixed_waveplates(unitaries_angles[N], path=2)
+    normal_dump_delay = st.CHANNELS[DUMP_CH]['delay']
+    st.CHANNELS[DUMP_CH]['delay'] = st.DUMP_TOMO_DELAY
+    print(f"Dump delay set to {st.DUMP_TOMO_DELAY} ns (dump-after-1-loop, path 2)")
+    data = {}
+    try:
+        for label in labels:
+            print(f"\n=== Path 2 (dump) | Input |{label}> ===")
+            set_input(label)
+            data[label] = _sweep_output_bases(HWP_OUT_2, QWP_OUT_2, N, duration, DUMP_CH)
+    finally:
+        st.CHANNELS[DUMP_CH]['delay'] = normal_dump_delay
+        print(f"Dump delay restored to {normal_dump_delay} ns")
+    return data
+
+
 def perform_tomo():
     """Photon-counting tomography of the 2-port Sagnac gate for a chosen
-    unitary N: sweep an input basis set through all 6 output bases, on each
-    of the gate's two physical outputs in turn, then plot measured vs
-    theoretical U for each.
+    unitary N: sweep an input basis set through all 6 output bases, on
+    either or both of the gate's physical outputs, then plot measured vs
+    theoretical U for each path run.
 
-    path 1 = ch2 (loop-1 exit) via TOM_1, OUT_2 fixed at the U-angle —
-    the gate output that feeds the loop.
-    path 2 = dump (ch7) via OUT_2 — a polariser sits behind the OUT_2
-    plates in that arm, so OUT_2 is the correct analyzer here (not
-    TOM_DUMP, a separate stage pair); getUnitary(path=2) already excludes
-    hf2/qf2 from U to match. TOM_1 is fixed at the U-angle for this pass,
-    and dump's delay is swapped to the straight-to-dump value since path 2
-    is the un-looped gate output.
-
-    These need two separate waveplate configurations (path=1 fixes OUT_2
-    free/TOM_1 fixed vs path=2 fixes TOM_1 free/OUT_2 fixed), so each input
-    basis gets measured in two full passes, not one shared sweep.
+    path 1 and path 2 need opposite fixed/free waveplate configurations
+    (see _tomo_path1/_tomo_path2), so running both means two full passes
+    over every input label, not one shared sweep.
     """
     N = _ask_N()
     choice = input(
@@ -274,41 +302,38 @@ def perform_tomo():
         print("Invalid choice — pick 1-4")
         return
 
+    path_choice = input(
+        "Which path?\n"
+        "\t1. Path 1 only (ch2 via TOM_1)\n"
+        "\t2. Path 2 only (dump via OUT_2)\n"
+        "\t3. Both\n"
+        "> ").strip()
+    if path_choice not in ('1', '2', '3'):
+        print("Invalid choice — pick 1-3")
+        return
+    do1, do2 = path_choice in ('1', '3'), path_choice in ('2', '3')
+    n_paths = do1 + do2
+
     duration = _ask_tomo_integration()
-    total_s = len(labels) * 2 * len(tl.FULL_BASES) * duration
-    print(f"{len(labels)} inputs x 2 paths x 6 output bases x {duration:.0f}s = ~{total_s:.0f}s total")
-
-    # --- Path 1: ch2 via TOM_1, OUT_2 fixed at U-angle ---
-    _set_fixed_waveplates(unitaries_angles[N], path=1)
-    _beep()
-    data1 = {}
-    for label in labels:
-        print(f"\n=== Path 1 (ch{LOOP_CHS[0]}) | Input |{label}> ===")
-        set_input(label)
-        data1[label] = _sweep_output_bases(HWP_TOM_1, QWP_TOM_1, N, duration, LOOP_CHS[0])
-
-    # --- Path 2: dump via OUT_2, TOM_1 fixed at U-angle, dump delay swapped ---
-    _set_fixed_waveplates(unitaries_angles[N], path=2)
-    normal_dump_delay = st.CHANNELS[DUMP_CH]['delay']
-    st.CHANNELS[DUMP_CH]['delay'] = st.DUMP_STRAIGHT_DELAY
-    print(f"Dump delay set to {st.DUMP_STRAIGHT_DELAY} ns (straight-to-dump, path 2)")
-    data2 = {}
-    try:
-        for label in labels:
-            print(f"\n=== Path 2 (dump) | Input |{label}> ===")
-            set_input(label)
-            data2[label] = _sweep_output_bases(HWP_OUT_2, QWP_OUT_2, N, duration, DUMP_CH)
-    finally:
-        st.CHANNELS[DUMP_CH]['delay'] = normal_dump_delay
-        print(f"Dump delay restored to {normal_dump_delay} ns")
+    total_s = len(labels) * n_paths * len(tl.FULL_BASES) * duration
+    print(f"{len(labels)} inputs x {n_paths} path(s) x 6 output bases x "
+          f"{duration:.0f}s = ~{total_s:.0f}s total")
 
     angles = {**unitaries_angles[N], 'N': N, 'title': f'U{N}'}
-    fit1 = plotting.plot_characterisation(data1, graph_title=f'U{N}_path1_ch{LOOP_CHS[0]}',
-                                          angles=angles, plot_type=f'U{N}_path1', path=1)
-    fit2 = plotting.plot_characterisation(data2, graph_title=f'U{N}_path2_dump',
-                                          angles=angles, plot_type=f'U{N}_path2', path=2)
-    print(f"path1 (ch{LOOP_CHS[0]}) fit residual: {fit1:.4f}  |  path2 (dump) fit residual: {fit2:.4f}")
-    notify(f"Tomo U{N} done — fit1={fit1:.4f} fit2={fit2:.4f}",
+    fits = {}
+    if do1:
+        data1 = _tomo_path1(N, labels, set_input, duration)
+        fits[1] = plotting.plot_characterisation(
+            data1, graph_title=f'U{N}_path1_ch{LOOP_CHS[0]}',
+            angles=angles, plot_type=f'U{N}_path1', path=1)
+    if do2:
+        data2 = _tomo_path2(N, labels, set_input, duration)
+        fits[2] = plotting.plot_characterisation(
+            data2, graph_title=f'U{N}_path2_dump',
+            angles=angles, plot_type=f'U{N}_path2', path=2)
+
+    print("  |  ".join(f"path{p} fit residual: {fit:.4f}" for p, fit in fits.items()))
+    notify(f"Tomo U{N} done — " + ", ".join(f"fit{p}={fit:.4f}" for p, fit in fits.items()),
            title="Tomography Complete", priority="high")
 
 
