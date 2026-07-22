@@ -1,6 +1,5 @@
 from hardware.detector import Logic16
 from libraries.settings import TRIGG_CH, DET_CHS, DUMP_CH, LOOP_CHS, COINCIDENCE_WINDOW, DELAYS, THRESHOLDS
-import time
 import numpy as np
 
 def acquire_counts(
@@ -67,52 +66,40 @@ def acquire_rows(
 def stream_herald_and_signal(
     herald_ch: int = TRIGG_CH,
     signal_ch: int = DET_CHS[0],
-    duration: float = 20.0,
+    duration: float | None = None,
     coincidence_window: float = COINCIDENCE_WINDOW,
     delays: list = DELAYS,
 ):
     """
-    Streams singles counts from a herald channel and a single signal channel,
-    plus their coincidence rate, in near-real-time.
+    Streams the herald/signal coincidence count, averaged over 1 s windows.
 
     Args:
         herald_ch: Herald/trigger channel number.
         signal_ch: Signal detector channel number.
-        duration: How long to stream for, in seconds.
+        duration: How long to stream for, in seconds. None = until Ctrl-C.
         coincidence_window: Coincidence window in ns.
         delays: List of per-channel delays (index = channel - 1).
     """
     singles_chs = [herald_ch, signal_ch]
     coincidence_chs = [[herald_ch, signal_ch]]
 
-    print(f"Streaming herald (ch {herald_ch}) and signal (ch {signal_ch})...")
+    print(f"Streaming coincidences (ch {herald_ch} & ch {signal_ch}), 1 s windows"
+          f"{'' if duration is None else f', {duration:.0f}s'}"
+          " (Ctrl-C to stop)...")
 
-    with Logic16(coincidence_window=coincidence_window, logic_mode=True) as logic:
+    with Logic16(coincidence_window=coincidence_window, logic_mode=True,
+                 integration_window=1.0) as logic:
         logic.configure(threshold=THRESHOLDS, coincidence_window=coincidence_window, delays=delays)
 
-        start_time = time.time()
-        last = time.monotonic()
-        while (time.time() - start_time) < duration:
-            c_counts, s_counts, _timecounter = logic.read_counts(
+        elapsed = 0.0
+        while duration is None or elapsed < duration:
+            c_counts, _s_counts, t = logic.read_counts_integrated(
                 pos_coincidence=coincidence_chs,
                 pos_singles=singles_chs,
             )
-            now = time.monotonic()
-            delta_t = now - last
-            last = now
-
-            herald_rate = s_counts[0] / delta_t
-            signal_rate = s_counts[1] / delta_t
-            coinc_rate = c_counts[0] / delta_t
-
-            print(
-                f"Herald (ch {herald_ch}): {herald_rate:.1f} Hz | "
-                f"Signal (ch {signal_ch}): {signal_rate:.1f} Hz | "
-                f"Coincidences: {coinc_rate:.1f} Hz | "
-                f"Δt: {delta_t:.4f} s"
-            )
-
-            time.sleep(0.05)
+            rate = c_counts[0] / t if t > 0 else 0.0
+            print(f"Coincidences: {c_counts[0]:.0f} in {t:.2f}s ({rate:.1f} Hz)")
+            elapsed += t
 
 
 # rework to return a pandas dataframe with titles and counts maybe, maybe make a yield thing

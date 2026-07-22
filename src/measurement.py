@@ -348,7 +348,7 @@ def _stream_channel(channel, duration, label=None):
     stream_herald_and_signal(signal_ch=channel, duration=duration, delays=delays_for())
 
 
-def read_outputs(duration=20.0):
+def read_outputs(duration=None):
     """Stream one output channel live: singles + coincidences with the herald.
     All delays are fixed now, so no unitary N is needed."""
     options = [(TRIGG_CH, 'herald'),
@@ -395,8 +395,8 @@ def check_projector():
         print("Invalid basis choice")
         return
 
-    d = input("Stream duration in seconds (default 20): ").strip()
-    duration = float(d) if d else 20.0
+    d = input("Stream duration in seconds (Enter = stream until Ctrl-C): ").strip()
+    duration = float(d) if d else None
 
     _set_fixed_waveplates(unitaries_angles[N], path=path)
     _set_input_basis(in_basis)
