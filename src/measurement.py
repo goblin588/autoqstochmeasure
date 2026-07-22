@@ -222,32 +222,37 @@ def _ask_tomo_integration():
             print("Enter a number of seconds")
 
 
-def _output_tomo_counts(N, duration):
-    """Sweep the output analyzer through HVADRL, reading ch2 (loop-1, path 1)
-    and ch7 (dump, path 2) coincidence counts at each basis.
-    Returns (path1_data, path2_data), each {basis: (count, err)}.
-    """
-    path1, path2 = {}, {}
+def _sweep_output_bases(HWP, QWP, N, duration, channel):
+    """Sweep (HWP, QWP) through HVADRL, reading `channel`'s coincidence
+    count at each basis. Returns {basis: (count, err)}."""
+    data = {}
     for basis in tl.FULL_BASES:
-        _set_tomo_stages(HWP=HWP_TOM_1, QWP=QWP_TOM_1, basis=basis)
-        _set_tomo_stages(HWP=HWP_TOM_DUMP, QWP=QWP_TOM_DUMP, basis=basis)
+        _set_tomo_stages(HWP=HWP, QWP=QWP, basis=basis)
         counts = _acquire_counts(duration, N)
-        c2 = counts.get(f'coinc_ch{LOOP_CHS[0]}', 0)
-        c7 = counts.get(f'coinc_ch{DUMP_CH}', 0)
-        path1[basis] = (c2, (c2 if c2 > 0 else 1) ** 0.5)
-        path2[basis] = (c7, (c7 if c7 > 0 else 1) ** 0.5)
-        print(f"  |{basis}>: ch{LOOP_CHS[0]}={c2}  ch{DUMP_CH}(dump)={c7}")
-    return path1, path2
+        c = counts.get(f'coinc_ch{channel}', 0)
+        data[basis] = (c, (c if c > 0 else 1) ** 0.5)
+        print(f"  |{basis}>: ch{channel}={c}")
+    return data
 
 
 def perform_tomo():
     """Photon-counting tomography of the 2-port Sagnac gate for a chosen
-    unitary N: sweep an input basis set, and at each input sweep the output
-    analyzer through HVADRL, then plot measured vs theoretical U.
+    unitary N: sweep an input basis set through all 6 output bases, on each
+    of the gate's two physical outputs in turn, then plot measured vs
+    theoretical U for each.
 
-    path 1 = ch2 (loop-1 exit, normal delay) — the gate output that feeds the loop.
-    path 2 = dump (ch7, delay swapped to the straight-to-dump value for the
-    duration of this run) — the gate's other output, taken before any looping.
+    path 1 = ch2 (loop-1 exit) via TOM_1, OUT_2 fixed at the U-angle —
+    the gate output that feeds the loop.
+    path 2 = dump (ch7) via OUT_2 — a polariser sits behind the OUT_2
+    plates in that arm, so OUT_2 is the correct analyzer here (not
+    TOM_DUMP, a separate stage pair); getUnitary(path=2) already excludes
+    hf2/qf2 from U to match. TOM_1 is fixed at the U-angle for this pass,
+    and dump's delay is swapped to the straight-to-dump value since path 2
+    is the un-looped gate output.
+
+    These need two separate waveplate configurations (path=1 fixes OUT_2
+    free/TOM_1 fixed vs path=2 fixes TOM_1 free/OUT_2 fixed), so each input
+    basis gets measured in two full passes, not one shared sweep.
     """
     N = _ask_N()
     choice = input("Input sweep? (HVAD / HVADRL / Sj / Sall): ").strip().upper()
@@ -264,22 +269,29 @@ def perform_tomo():
         return
 
     duration = _ask_tomo_integration()
-    total_s = len(labels) * len(tl.FULL_BASES) * duration
-    print(f"{len(labels)} inputs x 6 output bases x {duration:.0f}s = ~{total_s:.0f}s total")
+    total_s = len(labels) * 2 * len(tl.FULL_BASES) * duration
+    print(f"{len(labels)} inputs x 2 paths x 6 output bases x {duration:.0f}s = ~{total_s:.0f}s total")
 
-    _set_fixed_waveplates(unitaries_angles[N], path=1)  # leaves TOM_1 free for the sweep
+    # --- Path 1: ch2 via TOM_1, OUT_2 fixed at U-angle ---
+    _set_fixed_waveplates(unitaries_angles[N], path=1)
     _beep()
+    data1 = {}
+    for label in labels:
+        print(f"\n=== Path 1 (ch{LOOP_CHS[0]}) | Input |{label}> ===")
+        set_input(label)
+        data1[label] = _sweep_output_bases(HWP_TOM_1, QWP_TOM_1, N, duration, LOOP_CHS[0])
 
+    # --- Path 2: dump via OUT_2, TOM_1 fixed at U-angle, dump delay swapped ---
+    _set_fixed_waveplates(unitaries_angles[N], path=2)
     normal_dump_delay = st.CHANNELS[DUMP_CH]['delay']
     st.CHANNELS[DUMP_CH]['delay'] = st.DUMP_STRAIGHT_DELAY
     print(f"Dump delay set to {st.DUMP_STRAIGHT_DELAY} ns (straight-to-dump, path 2)")
-
-    data1, data2 = {}, {}
+    data2 = {}
     try:
         for label in labels:
-            print(f"\n=== Input |{label}> ===")
+            print(f"\n=== Path 2 (dump) | Input |{label}> ===")
             set_input(label)
-            data1[label], data2[label] = _output_tomo_counts(N, duration)
+            data2[label] = _sweep_output_bases(HWP_OUT_2, QWP_OUT_2, N, duration, DUMP_CH)
     finally:
         st.CHANNELS[DUMP_CH]['delay'] = normal_dump_delay
         print(f"Dump delay restored to {normal_dump_delay} ns")
@@ -292,39 +304,6 @@ def perform_tomo():
     print(f"path1 (ch{LOOP_CHS[0]}) fit residual: {fit1:.4f}  |  path2 (dump) fit residual: {fit2:.4f}")
     notify(f"Tomo U{N} done — fit1={fit1:.4f} fit2={fit2:.4f}",
            title="Tomography Complete", priority="high")
-
-
-def test_detectors(N='3', duration=2.0):
-    """Short acquisition; report whether the chosen channels see counts.
-
-    Asks which channels to check (some legitimately sit dark depending on
-    the process), Enter = all. Delays are fixed now, so N is unused — kept
-    for signature compatibility."""
-    names = {TRIGG_CH: 'herald', **{ch: f'singles_ch{ch}' for ch in DET_CHS}}
-    raw = input(f"Channels to test ({TRIGG_CH}=herald, "
-                f"{', '.join(map(str, DET_CHS))}; Enter = all): ").strip()
-    if raw:
-        try:
-            chans = [int(c) for c in raw.replace(',', ' ').split()]
-        except ValueError:
-            print("Enter channel numbers separated by spaces or commas")
-            return False
-        bad = [c for c in chans if c not in names]
-        if bad:
-            print(f"Unknown channel(s) {bad}; pick from {list(names)}")
-            return False
-    else:
-        chans = list(names)
-
-    counts = _acquire_counts(duration, N)
-    ok = True
-    for ch in chans:
-        n = counts[names[ch]]
-        status = "OK" if n > 0 else "NO COUNTS"
-        ok = ok and n > 0
-        print(f"  ch{ch} ({names[ch]}): {n} counts in {counts['int_time']:.2f}s [{status}]")
-    print("Detectors OK" if ok else "Some tested channels read zero — check detectors")
-    return ok
 
 
 def read_outputs(duration=20.0):
@@ -397,12 +376,11 @@ def main():
             "\t2. Collect statistics without tomo\n"
             "\t3. Collect statistics with output tomo\n"
             "\t4. Collect statistics for each input s_j\n"
-            "\t5. Test detectors\n"
-            "\t6. Test antilatch server connection\n"
-            "\t7. Stream a channel\n"
-            "\t8. Tune channel delays (±10 ns local scan + window check)\n"
-            "\t9. Unlatch detectors (antilatch only, card untouched)\n"
-            "\t10. Perform tomography (photon counting) + plot\n"
+            "\t5. Test antilatch server connection\n"
+            "\t6. Stream a channel\n"
+            "\t7. Tune channel delays (±10 ns local scan + window check)\n"
+            "\t8. Unlatch detectors (antilatch only, card untouched)\n"
+            "\t9. Perform tomography (photon counting) + plot\n"
             )
 
         match n:
@@ -418,18 +396,16 @@ def main():
             case '4':
                 measurement(_ask_N(), allInputs=True)
             case '5':
-                test_detectors()
-            case '6':
                 ping_antilatch()
-            case '7':
+            case '6':
                 read_outputs()
-            case '8':
+            case '7':
                 if SIM_MODE:
                     print("[SIM MODE] delay tuning needs hardware")
                 else:
                     from libraries.countingcard import tune_delays
                     tune_delays()
-            case '9':
+            case '8':
                 if SIM_MODE:
                     print("[SIM MODE] no detectors to unlatch")
                 else:
@@ -438,10 +414,10 @@ def main():
                     from hardware.detector import reset_detectors
                     if reset_detectors():
                         print("Detectors unlatched (bias voltages cycled)")
-            case '10':
+            case '9':
                 perform_tomo()
             case _:
-                print("Please choose a valid option 1-10 from list:")
+                print("Please choose a valid option 1-9 from list:")
 
 
 if __name__ == "__main__":
