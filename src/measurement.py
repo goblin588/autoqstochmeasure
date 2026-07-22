@@ -16,6 +16,8 @@ if '--sim' in sys.argv:
     os.environ['AUTOTOMO_SIM'] = '1'
 
 import libraries.tomography as tl
+import libraries.settings as st
+import libraries.plotting as plotting
 from libraries.basis_vectors import process_state_angles, basis_angles
 from libraries.settings import HWP_IN, QWP_IN, COMPORT, SIM_MODE
 from libraries.waveplate_angles import unitaries_angles
@@ -55,6 +57,14 @@ def _set_input_state(N, j=0):
     tl.move_stage(HWP_IN, hwp_angle, COMPORT)
     tl.move_stage(QWP_IN, qwp_angle, COMPORT)
     print(f"(s{j}_{N}) READY")
+
+def _set_input_basis(basis):
+    """Set input polarisation to a named H/V/A/D/R/L basis (generic gate
+    tomography — distinct from _set_input_state's process-specific s_j prep)."""
+    hwp_angle, qwp_angle = basis_angles[basis]
+    tl.move_stage(HWP_IN, hwp_angle, COMPORT)
+    tl.move_stage(QWP_IN, qwp_angle, COMPORT)
+    print(f"Input set to |{basis}>")
 
 def _beep():
     print('\a', end='', flush=True)
@@ -199,6 +209,91 @@ def _ask_N():
         print("Invalid unitary choice")
 
 
+def _ask_tomo_integration():
+    """Integration time per output-basis point, in seconds (not the total
+    run — there are 6 output bases per input, so keep this short)."""
+    while True:
+        s = input("Integration time per basis setting, in seconds (default 5): ").strip()
+        if not s:
+            return 5.0
+        try:
+            return float(s)
+        except ValueError:
+            print("Enter a number of seconds")
+
+
+def _output_tomo_counts(N, duration):
+    """Sweep the output analyzer through HVADRL, reading ch2 (loop-1, path 1)
+    and ch7 (dump, path 2) coincidence counts at each basis.
+    Returns (path1_data, path2_data), each {basis: (count, err)}.
+    """
+    path1, path2 = {}, {}
+    for basis in tl.FULL_BASES:
+        _set_tomo_stages(HWP=HWP_TOM_1, QWP=QWP_TOM_1, basis=basis)
+        _set_tomo_stages(HWP=HWP_TOM_DUMP, QWP=QWP_TOM_DUMP, basis=basis)
+        counts = _acquire_counts(duration, N)
+        c2 = counts.get(f'coinc_ch{LOOP_CHS[0]}', 0)
+        c7 = counts.get(f'coinc_ch{DUMP_CH}', 0)
+        path1[basis] = (c2, (c2 if c2 > 0 else 1) ** 0.5)
+        path2[basis] = (c7, (c7 if c7 > 0 else 1) ** 0.5)
+        print(f"  |{basis}>: ch{LOOP_CHS[0]}={c2}  ch{DUMP_CH}(dump)={c7}")
+    return path1, path2
+
+
+def perform_tomo():
+    """Photon-counting tomography of the 2-port Sagnac gate for a chosen
+    unitary N: sweep an input basis set, and at each input sweep the output
+    analyzer through HVADRL, then plot measured vs theoretical U.
+
+    path 1 = ch2 (loop-1 exit, normal delay) — the gate output that feeds the loop.
+    path 2 = dump (ch7, delay swapped to the straight-to-dump value for the
+    duration of this run) — the gate's other output, taken before any looping.
+    """
+    N = _ask_N()
+    choice = input("Input sweep? (HVAD / HVADRL / Sj / Sall): ").strip().upper()
+    if choice == 'HVAD':
+        labels, set_input = tl.HVAD_BASES, _set_input_basis
+    elif choice == 'HVADRL':
+        labels, set_input = tl.FULL_BASES, _set_input_basis
+    elif choice in ('SJ', 'SALL'):
+        js = _input_states(N) if choice == 'SALL' else [0]
+        labels = tuple(f's{j}_{N}' for j in js)
+        set_input = lambda label: _set_input_state(N, int(label.split('_')[0][1:]))
+    else:
+        print("Invalid choice — pick HVAD, HVADRL, Sj, or Sall")
+        return
+
+    duration = _ask_tomo_integration()
+    total_s = len(labels) * len(tl.FULL_BASES) * duration
+    print(f"{len(labels)} inputs x 6 output bases x {duration:.0f}s = ~{total_s:.0f}s total")
+
+    _set_fixed_waveplates(unitaries_angles[N], path=1)  # leaves TOM_1 free for the sweep
+    _beep()
+
+    normal_dump_delay = st.CHANNELS[DUMP_CH]['delay']
+    st.CHANNELS[DUMP_CH]['delay'] = st.DUMP_STRAIGHT_DELAY
+    print(f"Dump delay set to {st.DUMP_STRAIGHT_DELAY} ns (straight-to-dump, path 2)")
+
+    data1, data2 = {}, {}
+    try:
+        for label in labels:
+            print(f"\n=== Input |{label}> ===")
+            set_input(label)
+            data1[label], data2[label] = _output_tomo_counts(N, duration)
+    finally:
+        st.CHANNELS[DUMP_CH]['delay'] = normal_dump_delay
+        print(f"Dump delay restored to {normal_dump_delay} ns")
+
+    angles = {**unitaries_angles[N], 'N': N, 'title': f'U{N}'}
+    fit1 = plotting.plot_characterisation(data1, graph_title=f'U{N}_path1_ch{LOOP_CHS[0]}',
+                                          angles=angles, plot_type=f'U{N}_path1', path=1)
+    fit2 = plotting.plot_characterisation(data2, graph_title=f'U{N}_path2_dump',
+                                          angles=angles, plot_type=f'U{N}_path2', path=2)
+    print(f"path1 (ch{LOOP_CHS[0]}) fit residual: {fit1:.4f}  |  path2 (dump) fit residual: {fit2:.4f}")
+    notify(f"Tomo U{N} done — fit1={fit1:.4f} fit2={fit2:.4f}",
+           title="Tomography Complete", priority="high")
+
+
 def test_detectors(N='3', duration=2.0):
     """Short acquisition; report whether the chosen channels see counts.
 
@@ -307,6 +402,7 @@ def main():
             "\t7. Stream a channel\n"
             "\t8. Tune channel delays (±10 ns local scan + window check)\n"
             "\t9. Unlatch detectors (antilatch only, card untouched)\n"
+            "\t10. Perform tomography (photon counting) + plot\n"
             )
 
         match n:
@@ -342,8 +438,10 @@ def main():
                     from hardware.detector import reset_detectors
                     if reset_detectors():
                         print("Detectors unlatched (bias voltages cycled)")
+            case '10':
+                perform_tomo()
             case _:
-                print("Please choose a valid option 1-9 from list:")
+                print("Please choose a valid option 1-10 from list:")
 
 
 if __name__ == "__main__":
