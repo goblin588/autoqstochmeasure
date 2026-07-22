@@ -255,17 +255,23 @@ def perform_tomo():
     basis gets measured in two full passes, not one shared sweep.
     """
     N = _ask_N()
-    choice = input("Input sweep? (HVAD / HVADRL / Sj / Sall): ").strip().upper()
-    if choice == 'HVAD':
+    choice = input(
+        "Input sweep?\n"
+        "\t1. HVAD (4 generic polarisation bases)\n"
+        "\t2. HVADRL (6 generic polarisation bases)\n"
+        "\t3. Sj (single process state s0)\n"
+        "\t4. Sall (every process state s_j for this N)\n"
+        "> ").strip()
+    if choice == '1':
         labels, set_input = tl.HVAD_BASES, _set_input_basis
-    elif choice == 'HVADRL':
+    elif choice == '2':
         labels, set_input = tl.FULL_BASES, _set_input_basis
-    elif choice in ('SJ', 'SALL'):
-        js = _input_states(N) if choice == 'SALL' else [0]
+    elif choice in ('3', '4'):
+        js = _input_states(N) if choice == '4' else [0]
         labels = tuple(f's{j}_{N}' for j in js)
         set_input = lambda label: _set_input_state(N, int(label.split('_')[0][1:]))
     else:
-        print("Invalid choice — pick HVAD, HVADRL, Sj, or Sall")
+        print("Invalid choice — pick 1-4")
         return
 
     duration = _ask_tomo_integration()
@@ -309,18 +315,18 @@ def perform_tomo():
 def read_outputs(duration=20.0):
     """Stream one output channel live: singles + coincidences with the herald.
     All delays are fixed now, so no unitary N is needed."""
-    labels = {TRIGG_CH: 'herald',
-              **{ch: f'loop{i + 1}' for i, ch in enumerate(LOOP_CHS)}, DUMP_CH: 'dump'}
-    menu = ', '.join(f'{ch}={label}' for ch, label in labels.items())
-    choice = input(f"Which channel? ({menu}): ").strip()
+    options = [(TRIGG_CH, 'herald'),
+               *[(ch, f'loop{i + 1}') for i, ch in enumerate(LOOP_CHS)],
+               (DUMP_CH, 'dump')]
+    menu = '\n'.join(f'\t{i}. {label} (ch{ch})' for i, (ch, label) in enumerate(options, 1))
+    choice = input(f"Which channel?\n{menu}\n> ").strip()
     try:
-        ch = int(choice)
-        labels[ch]
-    except (ValueError, KeyError):
-        print(f"Pick a channel number from: {menu}")
+        ch, label = options[int(choice) - 1]
+    except (ValueError, IndexError):
+        print(f"Pick a number 1-{len(options)}")
         return
     if SIM_MODE:
-        print(f"[SIM MODE] would stream ch{ch} ({labels[ch]}) with delays {delays_for()}")
+        print(f"[SIM MODE] would stream ch{ch} ({label}) with delays {delays_for()}")
         return
     from libraries.countingcard import stream_herald_and_signal
     stream_herald_and_signal(signal_ch=ch, duration=duration, delays=delays_for())
