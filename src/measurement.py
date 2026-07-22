@@ -337,6 +337,17 @@ def perform_tomo():
            title="Tomography Complete", priority="high")
 
 
+def _stream_channel(channel, duration, label=None):
+    """SIM_MODE guard + stream_herald_and_signal call, shared by read_outputs
+    and check_projector."""
+    tag = f" ({label})" if label else ""
+    if SIM_MODE:
+        print(f"[SIM MODE] would stream ch{channel}{tag} with delays {delays_for()}")
+        return
+    from libraries.countingcard import stream_herald_and_signal
+    stream_herald_and_signal(signal_ch=channel, duration=duration, delays=delays_for())
+
+
 def read_outputs(duration=20.0):
     """Stream one output channel live: singles + coincidences with the herald.
     All delays are fixed now, so no unitary N is needed."""
@@ -350,11 +361,62 @@ def read_outputs(duration=20.0):
     except (ValueError, IndexError):
         print(f"Pick a number 1-{len(options)}")
         return
-    if SIM_MODE:
-        print(f"[SIM MODE] would stream ch{ch} ({label}) with delays {delays_for()}")
+    _stream_channel(ch, duration, label)
+
+
+def _ask_basis(prompt):
+    """Numbered H/V/A/D/R/L picker. Returns the basis letter, or None."""
+    menu = '\n'.join(f'\t{i}. {b}' for i, b in enumerate(tl.FULL_BASES, 1))
+    choice = input(f"{prompt}\n{menu}\n> ").strip()
+    try:
+        return tl.FULL_BASES[int(choice) - 1]
+    except (ValueError, IndexError):
+        return None
+
+
+def check_projector():
+    """Set one input/output basis pair on a chosen path and stream the live
+    coincidence rate — for phase tuning after a tomo run: e.g. D in, L out,
+    path 2, watch the count while adjusting a phase element by hand."""
+    N = _ask_N()
+    path_choice = input(
+        "Which path?\n"
+        "\t1. Path 1 (ch2 via TOM_1)\n"
+        "\t2. Path 2 (dump via OUT_2)\n"
+        "> ").strip()
+    if path_choice not in ('1', '2'):
+        print("Invalid choice — pick 1 or 2")
         return
-    from libraries.countingcard import stream_herald_and_signal
-    stream_herald_and_signal(signal_ch=ch, duration=duration, delays=delays_for())
+    path = int(path_choice)
+
+    in_basis = _ask_basis("Input basis?")
+    out_basis = _ask_basis("Output basis?")
+    if in_basis is None or out_basis is None:
+        print("Invalid basis choice")
+        return
+
+    d = input("Stream duration in seconds (default 20): ").strip()
+    duration = float(d) if d else 20.0
+
+    _set_fixed_waveplates(unitaries_angles[N], path=path)
+    _set_input_basis(in_basis)
+
+    if path == 1:
+        _set_tomo_stages(HWP=HWP_TOM_1, QWP=QWP_TOM_1, basis=out_basis)
+        print(f"|{in_basis}> in, |{out_basis}> out, path 1 (ch{LOOP_CHS[0]}) — streaming")
+        _stream_channel(LOOP_CHS[0], duration, label=f'{in_basis}in_{out_basis}out_path1')
+        return
+
+    _set_tomo_stages(HWP=HWP_OUT_2, QWP=QWP_OUT_2, basis=out_basis)
+    normal_dump_delay = st.CHANNELS[DUMP_CH]['delay']
+    st.CHANNELS[DUMP_CH]['delay'] = st.DUMP_DELAYS[1]
+    print(f"Dump delay set to {st.DUMP_DELAYS[1]} ns (dump-after-1-loop, path 2)")
+    print(f"|{in_basis}> in, |{out_basis}> out, path 2 (dump) — streaming")
+    try:
+        _stream_channel(DUMP_CH, duration, label=f'{in_basis}in_{out_basis}out_path2')
+    finally:
+        st.CHANNELS[DUMP_CH]['delay'] = normal_dump_delay
+        print(f"Dump delay restored to {normal_dump_delay} ns")
 
 
 def ping_antilatch():
@@ -412,6 +474,7 @@ def main():
             "\t7. Tune channel delays (±10 ns local scan + window check)\n"
             "\t8. Unlatch detectors (antilatch only, card untouched)\n"
             "\t9. Perform tomography (photon counting) + plot\n"
+            "\t10. Check single input/output projector (phase tuning)\n"
             )
 
         match n:
@@ -447,8 +510,10 @@ def main():
                         print("Detectors unlatched (bias voltages cycled)")
             case '9':
                 perform_tomo()
+            case '10':
+                check_projector()
             case _:
-                print("Please choose a valid option 1-9 from list:")
+                print("Please choose a valid option 1-10 from list:")
 
 
 if __name__ == "__main__":
