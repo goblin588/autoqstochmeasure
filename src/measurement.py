@@ -20,7 +20,7 @@ if '--sim' in sys.argv:
 import libraries.tomography as tl
 import libraries.settings as st
 import libraries.plotting as plotting
-from libraries.basis_vectors import process_state_angles, basis_angles
+from libraries.basis_vectors import process_state_angles, basis_angles, tomo_angles
 from libraries.settings import HWP_IN, QWP_IN, COMPORT, SIM_MODE
 from libraries.waveplate_angles import unitaries_angles
 from libraries.settings import (HWP_IN, QWP_IN, QWP_TOM_DUMP, HWP_TOM_DUMP,
@@ -98,8 +98,8 @@ def _remind_switch_dwell(N):
 
 def _set_tomo_stages(HWP, QWP, basis):
     """ For tomo ordering QWP -> HWP """
-    tl.move_stage(HWP, basis_angles[basis][0], COMPORT)
-    tl.move_stage(QWP, basis_angles[basis][1], COMPORT)
+    tl.move_stage(HWP, tomo_angles[basis][0], COMPORT)
+    tl.move_stage(QWP, tomo_angles[basis][1], COMPORT)
 
 
 def _sim_row(duration, chs=DET_CHS):
