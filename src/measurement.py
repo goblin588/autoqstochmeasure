@@ -12,6 +12,7 @@ import subprocess
 import sys
 import datetime
 import time
+from pathlib import Path
 
 if '--sim' in sys.argv:
     os.environ['AUTOTOMO_SIM'] = '1'
@@ -19,7 +20,7 @@ if '--sim' in sys.argv:
 import libraries.tomography as tl
 import libraries.settings as st
 import libraries.plotting as plotting
-from libraries.basis_vectors import process_state_angles, basis_angles
+from libraries.basis_vectors import process_state_angles, basis_angles, tomo_angles
 from libraries.settings import HWP_IN, QWP_IN, COMPORT, SIM_MODE
 from libraries.waveplate_angles import unitaries_angles
 from libraries.settings import (HWP_IN, QWP_IN, QWP_TOM_DUMP, HWP_TOM_DUMP,
@@ -85,37 +86,50 @@ def _set_unitary(N):
     _beep()
     print("UNITARY READY")
 
+def _remind_switch_dwell(N):
+    """Switch dwell is a manual hardware setting, not something this program
+    can drive — print the calibrated value (SWITCH_DWELL column) for process
+    N so the operator sets it before counting starts."""
+    dwell = st.SWITCH_DWELL_NS.get(int(N))
+    if dwell is None:
+        print(f"Set switch dwell manually for N={N} (not calibrated yet)")
+    else:
+        print(f"Set switch dwell to {dwell} ns (N={N})")
+
 def _set_tomo_stages(HWP, QWP, basis):
     """ For tomo ordering QWP -> HWP """
-    tl.move_stage(HWP, basis_angles[basis][0], COMPORT)
-    tl.move_stage(QWP, basis_angles[basis][1], COMPORT)
+    tl.move_stage(HWP, tomo_angles[basis][0], COMPORT)
+    tl.move_stage(QWP, tomo_angles[basis][1], COMPORT)
 
 
-def _sim_row(duration):
+def _sim_row(duration, chs=DET_CHS):
     return {'herald': 0,
-            **{f'singles_ch{ch}': 0 for ch in DET_CHS},
-            **{f'coinc_ch{ch}': 0 for ch in DET_CHS},
+            **{f'singles_ch{ch}': 0 for ch in chs},
+            **{f'coinc_ch{ch}': 0 for ch in chs},
             'int_time': duration}
 
 def _acquire_counts(duration, N):
-    """Integrate counts for `duration` s with delays for process N."""
+    """Integrate counts for `duration` s on loop channels 1..N + dump, with
+    delays (incl. dump-after-N) for process N."""
+    chs = st.det_chs_for(N)
     if SIM_MODE:
-        return _sim_row(duration)
+        return _sim_row(duration, chs)
     # imported here: hardware.detector loads the TimeTag DLL on import,
     # which doesn't exist in sim mode
     from libraries.countingcard import acquire_counts
-    return acquire_counts(duration, delays=delays_for(N))
+    return acquire_counts(duration, signal_chs=chs, delays=delays_for(N))
 
 def _acquire_rows(N, total):
     """Yield 1 s count rows until `total` s are collected (None = until Ctrl-C)."""
+    chs = st.det_chs_for(N)
     if SIM_MODE:
         done = 0.0
         while total is None or done < total:
-            yield _sim_row(1.0)
+            yield _sim_row(1.0, chs)
             done += 1.0
         return
     from libraries.countingcard import acquire_rows
-    yield from acquire_rows(total, delays=delays_for(N))
+    yield from acquire_rows(total, signal_chs=chs, delays=delays_for(N))
 
 def _git_commit():
     """Best-effort short git commit hash of the running code, for
@@ -148,23 +162,135 @@ def _save_results(rows, N, label):
         writer.writeheader()
         writer.writerows(rows)
 
+    calibration = _latest_calibration()
     meta = {
         'N': N,
         'label': label,
         'delays_ns': delays_for(N),
         'thresholds_v': st.THRESHOLDS,
         'coincidence_window_ns': st.COINCIDENCE_WINDOW,
-        'det_chs': DET_CHS,
+        'det_chs': st.det_chs_for(N),
         'dump_ch': DUMP_CH,
         'trigg_ch': TRIGG_CH,
         'sim_mode': SIM_MODE,
         'git_commit': _git_commit(),
         'saved_at': datetime.datetime.now().isoformat(),
+        # filename only (not a full path) so this stays valid whichever
+        # clone/checkout the data/ directory ends up analysed from
+        'noise_calibration': ({'file': calibration.name, 'saved_at': _calibration_date(calibration)}
+                              if calibration else None),
     }
     with open(f"{stem}.json", 'w') as f:
         json.dump(meta, f, indent=1)
 
     print(f"Saved {len(rows)} rows -> {stem}.csv (+ {stem}.json)")
+    if calibration:
+        print(f"Most recent calibration: {calibration.name} ({_calibration_date(calibration)})")
+    else:
+        print("No background calibration on file yet — run menu option 11")
+
+
+def _latest_calibration():
+    """Most recent data/*_noise_calibration.json, or None if none exist yet."""
+    files = sorted(Path('data').glob('*_noise_calibration.json'), key=lambda p: p.stat().st_mtime)
+    return files[-1] if files else None
+
+
+def _calibration_date(path):
+    return json.loads(path.read_text())['saved_at']
+
+
+def _countdown_from(n=3):
+    for i in range(n, 0, -1):
+        print(i, end=' ', flush=True)
+        time.sleep(1)
+    print('- recording')
+
+
+def _ask_calibration_duration():
+    while True:
+        s = input("Integration time per calibration step, in seconds (default 60): ").strip()
+        if not s:
+            return 60.0
+        try:
+            return float(s)
+        except ValueError:
+            print("Enter a number of seconds")
+
+
+def _acquire_counts_all(duration):
+    """Coincidence/singles counts on every detector channel — not scoped to
+    a process N, since background calibration isn't tied to a unitary."""
+    if SIM_MODE:
+        return _sim_row(duration, DET_CHS)
+    from libraries.countingcard import acquire_counts
+    return acquire_counts(duration, signal_chs=DET_CHS, delays=delays_for())
+
+
+CALIBRATION_STEPS = [
+    ('both_blocked',   "Block BOTH paths — herald and signal — at the source"),
+    ('herald_blocked', "Unblock the signal path; block the HERALD only"),
+    ('setup_blocked',  "Unblock the herald; block the SIGNAL path only (setup blocked)"),
+]
+
+
+def calibrate_background():
+    """Measure per-channel coincidence/singles background under three
+    blocking configurations, so real runs can subtract a validated noise
+    floor instead of curve-fitting one against theory.
+
+    background_rate_hz is taken from the 'setup_blocked' step (herald firing
+    normally, signal blocked) — that's the config that matches a real run's
+    out-of-support channels: a live herald, but no real signal reaching that
+    detector. 'both_blocked' and 'herald_blocked' are saved alongside it for
+    reference, not currently used downstream.
+
+    Saves data/{timestamp}_noise_calibration.json.
+    """
+    duration = _ask_calibration_duration()
+    results = {}
+    for key, instruction in CALIBRATION_STEPS:
+        input(f"\n{instruction}, then press Enter...")
+        _countdown_from(3)
+        counts = _acquire_counts_all(duration)
+        results[key] = counts
+        print(f"  {key}: {counts}")
+
+    int_time = results['setup_blocked']['int_time']
+    background_rate_hz = {
+        str(ch): results['setup_blocked'].get(f'coinc_ch{ch}', 0) / int_time
+        for ch in DET_CHS
+    }
+
+    calibration = {
+        'steps': results,
+        'background_rate_hz': background_rate_hz,
+        'duration_s': duration,
+        'saved_at': datetime.datetime.now().isoformat(),
+        'git_commit': _git_commit(),
+    }
+    os.makedirs('data', exist_ok=True)
+    stem = f"data/{datetime.datetime.now():%Y%m%d_%H%M%S}_noise_calibration"
+    with open(f"{stem}.json", 'w') as f:
+        json.dump(calibration, f, indent=1)
+    print(f"\nSaved calibration -> {stem}.json")
+    print(f"background_rate_hz (from setup_blocked): {background_rate_hz}")
+    notify("Background calibration done", title="Calibration Complete")
+    return calibration
+
+
+def _maybe_calibrate():
+    """Offer to (re)run background calibration before a measurement, showing
+    when it was last done."""
+    latest = _latest_calibration()
+    if latest is None:
+        if input("No background calibration on file yet. Run one now? [Y/n] ").strip().lower() in ('', 'y'):
+            calibrate_background()
+        return
+    ans = input(f"Last background calibration: {_calibration_date(latest)} — "
+               "perform a new one now? [y/N] ").strip().lower()
+    if ans == 'y':
+        calibrate_background()
 
 def _input_states(N):
     """All j's with a defined input state for process N.
@@ -198,8 +324,10 @@ def measurement(N, performTomo=False, allInputs=False):
     Everything goes to one file; rows carry an input_state column (= j).
     Returns the list of result rows so callers can aggregate.
     """
+    _maybe_calibrate()
     total = _ask_duration()
     _set_unitary(N)
+    _remind_switch_dwell(N)
     start = time.monotonic()
 
     js = _input_states(N) if allInputs else [0]
@@ -542,6 +670,7 @@ def main():
             "\t8. Unlatch detectors (antilatch only, card untouched)\n"
             "\t9. Perform tomography (photon counting) + plot\n"
             "\t10. Check single input/output projector (phase tuning)\n"
+            "\t11. Calibrate background noise (block/herald/setup, 3 steps)\n"
             )
 
         match n:
@@ -579,8 +708,10 @@ def main():
                 perform_tomo()
             case '10':
                 check_projector()
+            case '11':
+                calibrate_background()
             case _:
-                print("Please choose a valid option 1-10 from list:")
+                print("Please choose a valid option 1-11 from list:")
 
 
 if __name__ == "__main__":
