@@ -335,6 +335,7 @@ def measurement(N, performTomo=False, allInputs=False):
     js = _input_states(N) if allInputs else [0]
     bases = ['H', 'V', 'A', 'D', 'R', 'L'] if performTomo else [None]
     rows = []
+    print("\n\n")
     try:
         for j in js:
             _set_input_state(N, j)
@@ -348,7 +349,7 @@ def measurement(N, performTomo=False, allInputs=False):
                         rows.append({'N': N, 'input_state': j, 'basis': basis,
                                      'time': datetime.datetime.now().isoformat(),
                                      **counts})
-                        print(f"[s{j} {basis or 'no-tomo'}] {counts}")
+                        print(f"[s{j} {basis or 'no-tomo'}] {counts}", end="\r", flush=True)
                 except KeyboardInterrupt:
                     print("\nStopped — saving what we have")
                     return rows  # finally below still saves + notifies
