@@ -1,0 +1,70 @@
+{
+ "steps": {
+  "both_blocked": {
+   "herald": 17887,
+   "singles_ch2": 41780,
+   "coinc_ch2": 0,
+   "singles_ch4": 41780,
+   "coinc_ch4": 0,
+   "singles_ch6": 41780,
+   "coinc_ch6": 0,
+   "singles_ch8": 41780,
+   "coinc_ch8": 0,
+   "singles_ch10": 41780,
+   "coinc_ch10": 0,
+   "singles_ch12": 41780,
+   "coinc_ch12": 0,
+   "singles_ch7": 54997,
+   "coinc_ch7": 0,
+   "int_time": 30.03037389999372
+  },
+  "herald_blocked": {
+   "herald": 138228,
+   "singles_ch2": 49079,
+   "coinc_ch2": 3612,
+   "singles_ch4": 49079,
+   "coinc_ch4": 295,
+   "singles_ch6": 49079,
+   "coinc_ch6": 34,
+   "singles_ch8": 49079,
+   "coinc_ch8": 3,
+   "singles_ch10": 49079,
+   "coinc_ch10": 1,
+   "singles_ch12": 49079,
+   "coinc_ch12": 9,
+   "singles_ch7": 474999,
+   "coinc_ch7": 2,
+   "int_time": 30.02983280000626
+  },
+  "setup_blocked": {
+   "herald": 3124072,
+   "singles_ch2": 40830,
+   "coinc_ch2": 397,
+   "singles_ch4": 40830,
+   "coinc_ch4": 58,
+   "singles_ch6": 40830,
+   "coinc_ch6": 17,
+   "singles_ch8": 40830,
+   "coinc_ch8": 20,
+   "singles_ch10": 40830,
+   "coinc_ch10": 12,
+   "singles_ch12": 40830,
+   "coinc_ch12": 16,
+   "singles_ch7": 52906,
+   "coinc_ch7": 23,
+   "int_time": 30.030077000003075
+  }
+ },
+ "background_rate_hz": {
+  "2": 13.220079322472579,
+  "4": 1.931396979101787,
+  "6": 0.5660991145643169,
+  "8": 0.6659989583109611,
+  "10": 0.39959937498657666,
+  "12": 0.5327991666487689,
+  "7": 0.7658988020576053
+ },
+ "duration_s": 30.0,
+ "saved_at": "2026-07-30T12:18:22.579939",
+ "git_commit": "974e578"
+}
