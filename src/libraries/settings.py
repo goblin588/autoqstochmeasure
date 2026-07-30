@@ -64,14 +64,14 @@ CHANNELS = {
 # (a process of length N dumps after completing N loops); path-2 tomo
 # (_tomo_path2/check_projector) does the same swap directly with a chosen
 # loop count. No calibrated value yet for N=6 (dump-after-6).
-DUMP_DELAYS = {0: 3390, 1: 2954, 2: 2523, 3: 2084, 4: 1656, 5: 1223}
+DUMP_DELAYS = {0: 3390, 1: 2954, 2: 2523, 3: 2084, 4: 1656, 5: 1223, 6: 790}
 
 # "Switch Dwell" column — the photon switch's dwell time isn't under this
 # program's control, so this is just what to tell the operator to set it to
 # by hand before a measurement at process N starts (see measurement()'s
 # reminder print). No entry (or "man"/blank in the table) = set manually,
 # no calibrated number yet.
-SWITCH_DWELL_NS = {2: 125, 3: 210, 4: 300, 5: 390}
+SWITCH_DWELL_NS = {2: 125, 3: 210, 4: 300, 5: 390, 6: 480}
 
 THRESHOLDS = {ch: cfg['threshold'] for ch, cfg in CHANNELS.items()}
 
@@ -112,7 +112,7 @@ DET_CHS = [*LOOP_CHS, DUMP_CH]
 SINGLE_DET_CHS = [TRIGG_CH, *DET_CHS]
 COINCIDENCE_CHS = [[TRIGG_CH, ch] for ch in DET_CHS]
 COINCIDENCE_WINDOW = 2.0  # ns — keep within 1-3; tune_delays' window check recommends a value
-MEASUREMENT_INTEGRATION_S = 1.0  # seconds per row in measurement(); raise if 1 s rows are too noisy
+MEASUREMENT_INTEGRATION_S = 20.0  # seconds per row in measurement(); raise if 1 s rows are too noisy
 
 # ANTILATCH SERVER (detector bias reset over TCP, see detector-antilatch-server/)
 # These voltages are what actually get applied on reset — the server ignores its
