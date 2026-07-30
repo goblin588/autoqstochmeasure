@@ -53,9 +53,9 @@ CHANNELS = {
     2:  {'delay': 2972, 'threshold': 0.4},  # loop 1
     4:  {'delay': 2542, 'threshold': 0.4},  # loop 2
     6:  {'delay': 2108, 'threshold': 0.4},  # loop 3
-    8:  {'delay': 1675, 'threshold': 0.4},  # loop 4
-    10: {'delay': 1249, 'threshold': 0.4},  # loop 5
-    12: {'delay': 818,  'threshold': 0.4},  # loop 6
+    8:  {'delay': 1676, 'threshold': 0.4},  # loop 4
+    10: {'delay': 1240, 'threshold': 0.4},  # loop 5
+    12: {'delay': 810,  'threshold': 0.4},  # loop 6
     7:  {'delay': 1220, 'threshold': 0.2},  # dump — parked value; overridden per-N by delays_for()
 }
 # "Dump After" column of the calibration table — dump channel delay if the
