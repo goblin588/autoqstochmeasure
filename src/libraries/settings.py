@@ -52,8 +52,8 @@ CHANNELS = {
     3:  {'delay': 3841, 'threshold': 0.6},  # herald
     2:  {'delay': 2972, 'threshold': 0.4},  # loop 1
     4:  {'delay': 2542, 'threshold': 0.4},  # loop 2
-    6:  {'delay': 2110, 'threshold': 0.4},  # loop 3
-    8:  {'delay': 1677, 'threshold': 0.4},  # loop 4
+    6:  {'delay': 2108, 'threshold': 0.4},  # loop 3
+    8:  {'delay': 1675, 'threshold': 0.4},  # loop 4
     10: {'delay': 1249, 'threshold': 0.4},  # loop 5
     12: {'delay': 818,  'threshold': 0.4},  # loop 6
     7:  {'delay': 1220, 'threshold': 0.2},  # dump — parked value; overridden per-N by delays_for()
@@ -64,14 +64,14 @@ CHANNELS = {
 # (a process of length N dumps after completing N loops); path-2 tomo
 # (_tomo_path2/check_projector) does the same swap directly with a chosen
 # loop count. No calibrated value yet for N=6 (dump-after-6).
-DUMP_DELAYS = {0: 3385, 1: 2952, 2: 2519, 3: 2084, 4: 1650, 5: 1220}
+DUMP_DELAYS = {0: 3390, 1: 2954, 2: 2523, 3: 2084, 4: 1656, 5: 1223}
 
 # "Switch Dwell" column — the photon switch's dwell time isn't under this
 # program's control, so this is just what to tell the operator to set it to
 # by hand before a measurement at process N starts (see measurement()'s
 # reminder print). No entry (or "man"/blank in the table) = set manually,
 # no calibrated number yet.
-SWITCH_DWELL_NS = {2: 69, 3: 155, 4: 245, 5: 335}
+SWITCH_DWELL_NS = {2: 125, 3: 210, 4: 300, 5: 390}
 
 THRESHOLDS = {ch: cfg['threshold'] for ch, cfg in CHANNELS.items()}
 
@@ -120,4 +120,4 @@ COINCIDENCE_WINDOW = 2.0  # ns — keep within 1-3; tune_delays' window check re
 ANTILATCH_HOST = '10.126.251.233'  # blue-box PC
 ANTILATCH_PORT = 65201
 ANTILATCH_DEVICE_IDS = [0]
-ANTILATCH_BIAS_VOLTAGES = [{0: 4, 1: 4.45, 2: 0.23, 3: 3.6}]
+ANTILATCH_BIAS_VOLTAGES = [{0: 4.27, 1: 4.22, 2: 0.25, 3: 3.6}]
