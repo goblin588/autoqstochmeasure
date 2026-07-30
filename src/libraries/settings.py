@@ -112,6 +112,7 @@ DET_CHS = [*LOOP_CHS, DUMP_CH]
 SINGLE_DET_CHS = [TRIGG_CH, *DET_CHS]
 COINCIDENCE_CHS = [[TRIGG_CH, ch] for ch in DET_CHS]
 COINCIDENCE_WINDOW = 2.0  # ns — keep within 1-3; tune_delays' window check recommends a value
+MEASUREMENT_INTEGRATION_S = 1.0  # seconds per row in measurement(); raise if 1 s rows are too noisy
 
 # ANTILATCH SERVER (detector bias reset over TCP, see detector-antilatch-server/)
 # These voltages are what actually get applied on reset — the server ignores its

@@ -120,16 +120,18 @@ def _acquire_counts(duration, N):
     return acquire_counts(duration, signal_chs=chs, delays=delays_for(N))
 
 def _acquire_rows(N, total):
-    """Yield 1 s count rows until `total` s are collected (None = until Ctrl-C)."""
+    """Yield count rows, each integrated for st.MEASUREMENT_INTEGRATION_S
+    seconds, until `total` s are collected (None = until Ctrl-C)."""
     chs = st.det_chs_for(N)
+    integration = st.MEASUREMENT_INTEGRATION_S
     if SIM_MODE:
         done = 0.0
         while total is None or done < total:
-            yield _sim_row(1.0, chs)
-            done += 1.0
+            yield _sim_row(integration, chs)
+            done += integration
         return
     from libraries.countingcard import acquire_rows
-    yield from acquire_rows(total, signal_chs=chs, delays=delays_for(N))
+    yield from acquire_rows(total, integration=integration, signal_chs=chs, delays=delays_for(N))
 
 def _git_commit():
     """Best-effort short git commit hash of the running code, for
@@ -313,7 +315,7 @@ def _ask_duration():
             print("Enter a number of minutes, or press Enter to stream")
 
 def measurement(N, performTomo=False, allInputs=False):
-    """Collect statistics through unitary N in 1 s acquisitions, one row each.
+    """Collect statistics through unitary N, one row per st.MEASUREMENT_INTEGRATION_S seconds.
 
     performTomo=False : collect at the current analyzer setting
     performTomo=True  : full 6-basis tomo sweep
@@ -694,7 +696,15 @@ def main():
                     print("[SIM MODE] delay tuning needs hardware")
                 else:
                     from libraries.countingcard import tune_delays
-                    tune_delays()
+                    from libraries.settings import LOOP_CHS
+                    chs = input(f"Channel(s) to tune, comma-separated "
+                                f"(Enter = all {LOOP_CHS}): ").strip()
+                    t = input("Integration time per point, in seconds "
+                              "(default 1; try 10 for channels that won't show a peak): ").strip()
+                    tune_delays(
+                        signal_chs=[int(c) for c in chs.split(',')] if chs else LOOP_CHS,
+                        integration_time=float(t) if t else 1.0,
+                    )
             case '8':
                 if SIM_MODE:
                     print("[SIM MODE] no detectors to unlatch")
