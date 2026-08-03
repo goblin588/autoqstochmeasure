@@ -87,11 +87,14 @@ if CAL_FILE.exists():
     _cal = json.loads(CAL_FILE.read_text())
     for _ch, _delay in _cal['channel_delays'].items():
         CHANNELS[int(_ch)]['delay'] = _delay
+    for _n, _delay in _cal.get('dump_delays', {}).items():
+        DUMP_DELAYS[int(_n)] = _delay
 
 def save_calibration():
     """Persist the current (tuned) delays; loaded over the defaults on import."""
     CAL_FILE.write_text(json.dumps({
         'channel_delays': {ch: cfg['delay'] for ch, cfg in CHANNELS.items()},
+        'dump_delays': DUMP_DELAYS,
     }, indent=1))
     print(f"Saved calibration -> {CAL_FILE}")
 

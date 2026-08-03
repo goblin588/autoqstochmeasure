@@ -697,14 +697,19 @@ def main():
                     print("[SIM MODE] delay tuning needs hardware")
                 else:
                     from libraries.countingcard import tune_delays
-                    from libraries.settings import LOOP_CHS
+                    from libraries.settings import LOOP_CHS, DUMP_CH
                     chs = input(f"Channel(s) to tune, comma-separated "
-                                f"(Enter = all {LOOP_CHS}): ").strip()
+                                f"(Enter = all {LOOP_CHS}; include {DUMP_CH} to also tune the dump): ").strip()
+                    signal_chs = [int(c) for c in chs.split(',')] if chs else LOOP_CHS
+                    dump_N = None
+                    if DUMP_CH in signal_chs:
+                        dump_N = int(input("Dump delay is per-N — which N is this for? ").strip())
                     t = input("Integration time per point, in seconds "
-                              "(default 1; try 10 for channels that won't show a peak): ").strip()
+                              "(default 10; raise for channels that won't show a peak): ").strip()
                     tune_delays(
-                        signal_chs=[int(c) for c in chs.split(',')] if chs else LOOP_CHS,
-                        integration_time=float(t) if t else 1.0,
+                        signal_chs=signal_chs,
+                        integration_time=float(t) if t else 10.0,
+                        dump_N=dump_N,
                     )
             case '8':
                 if SIM_MODE:

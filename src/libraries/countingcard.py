@@ -170,6 +170,7 @@ def tune_delays(
     min_step: float = 0.1,
     min_window: float = 0.2,
     experiment_window: float = 1.5,
+    dump_N: int | None = None,
 ):
     """Re-centre each signal channel's delay after drift, converging to a
     precise value by zooming in: scan ±span ns in `step` ns moves at the
@@ -189,6 +190,12 @@ def tune_delays(
     values. Answer y at the prompt to persist them to calibration.json
     (loaded over the hardcoded defaults on import).
 
+    Pass dump_N to also tune the dump channel (ch7) — include DUMP_CH in
+    signal_chs and give the process length N it's being tuned for. The
+    dump's delay is N-dependent (settings.DUMP_DELAYS[N], not
+    settings.CHANNELS) since it depends on how many loops ran before the
+    dump, so it's written there instead of CHANNELS on convergence.
+
     The session's coincidence window is left at `experiment_window` ns
     (the tight window used for tuning is only for locating the delay
     precisely, not for the actual measurement).
@@ -205,7 +212,7 @@ def tune_delays(
         print(f"Tuning {len(order)} channels, zooming from {step:.2g}/{COINCIDENCE_WINDOW:.2g} ns "
               f"(step/window) down to {min_step:.2g}/{min_window:.2g} ns")
         for i, ch in enumerate(order, 1):
-            delays = st.delays_for()
+            delays = st.delays_for(dump_N)
             current = delays[ch - 1]
             print(f"[{i}/{len(order)}] scanning ch{ch} around {current:.0f} ns:", flush=True)
 
@@ -233,7 +240,7 @@ def tune_delays(
 
                 if first_pass:
                     if ch == ref_ch:
-                        bg_delays = st.delays_for()
+                        bg_delays = st.delays_for(dump_N)
                         bg_delays[ch - 1] = best + background_offset
                         logic.set_delays(bg_delays)
                         bg_counts = []
@@ -260,8 +267,13 @@ def tune_delays(
                 window = max(window / 2, min_window)
 
             if best != current:
-                st.CHANNELS[ch]['delay'] = best
-                print(f"ch{ch}: {current:.0f} -> {best:.2f} ns (CHANNELS[{ch}]), "
+                if ch == DUMP_CH and dump_N is not None:
+                    st.DUMP_DELAYS[dump_N] = best
+                    dest = f"DUMP_DELAYS[{dump_N}]"
+                else:
+                    st.CHANNELS[ch]['delay'] = best
+                    dest = f"CHANNELS[{ch}]"
+                print(f"ch{ch}: {current:.0f} -> {best:.2f} ns ({dest}), "
                       f"peak {peak_counts:.0f} counts at {min_window:.2g} ns window", flush=True)
             changes[ch] = (current, best)
 
