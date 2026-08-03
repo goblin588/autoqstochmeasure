@@ -18,7 +18,12 @@ class Waveplate:
 COMPORT = 'COM6'
 SIM_MODE = os.environ.get('AUTOTOMO_SIM', '0') == '1'
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-FIG_DIR = PROJECT_ROOT / "data" / "Figures"
+
+# Where measurement() / calibrate_background() write their output. Point this
+# at a network drive (e.g. r"R:\autoqstochmeasure_data") to save there instead
+# of the local, gitignored data/ folder.
+DATA_DIR = PROJECT_ROOT / "data"
+FIG_DIR = DATA_DIR / "Figures"
 
 # WAVEPLATES: stage number + optical axis (deg)
 WAVEPLATES = {

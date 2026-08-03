@@ -156,8 +156,8 @@ def _save_results(rows, N, label):
     if not rows:
         print("No data to save")
         return
-    os.makedirs('data', exist_ok=True)
-    stem = f"data/{datetime.datetime.now():%Y%m%d_%H%M%S}_measurement_N{N}_s{label}"
+    os.makedirs(st.DATA_DIR, exist_ok=True)
+    stem = f"{st.DATA_DIR}/{datetime.datetime.now():%Y%m%d_%H%M%S}_measurement_N{N}_s{label}"
     fields = list(dict.fromkeys(k for r in rows for k in r))
     with open(f"{stem}.csv", 'w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=fields)
@@ -193,8 +193,8 @@ def _save_results(rows, N, label):
 
 
 def _latest_calibration():
-    """Most recent data/*_noise_calibration.json, or None if none exist yet."""
-    files = sorted(Path('data').glob('*_noise_calibration.json'), key=lambda p: p.stat().st_mtime)
+    """Most recent DATA_DIR/*_noise_calibration.json, or None if none exist yet."""
+    files = sorted(Path(st.DATA_DIR).glob('*_noise_calibration.json'), key=lambda p: p.stat().st_mtime)
     return files[-1] if files else None
 
 
@@ -271,8 +271,8 @@ def calibrate_background():
         'saved_at': datetime.datetime.now().isoformat(),
         'git_commit': _git_commit(),
     }
-    os.makedirs('data', exist_ok=True)
-    stem = f"data/{datetime.datetime.now():%Y%m%d_%H%M%S}_noise_calibration"
+    os.makedirs(st.DATA_DIR, exist_ok=True)
+    stem = f"{st.DATA_DIR}/{datetime.datetime.now():%Y%m%d_%H%M%S}_noise_calibration"
     with open(f"{stem}.json", 'w') as f:
         json.dump(calibration, f, indent=1)
     print(f"\nSaved calibration -> {stem}.json")
@@ -669,7 +669,7 @@ def main():
             "\t4. Collect statistics for each input s_j\n"
             "\t5. Test antilatch server connection\n"
             "\t6. Stream a channel\n"
-            "\t7. Tune channel delays (±10 ns local scan + window check)\n"
+            "\t7. Tune channel delays (zooms in to a precise value)\n"
             "\t8. Unlatch detectors (antilatch only, card untouched)\n"
             "\t9. Perform tomography (photon counting) + plot\n"
             "\t10. Check single input/output projector (phase tuning)\n"
