@@ -161,7 +161,7 @@ def stream_channels_with_delays(
 def tune_delays(
     step: float = 1.0,
     span: float = 10.0,
-    integration_time: float = 1.0,
+    integration_time: float = 10.0,
     signal_chs: list = LOOP_CHS,  # dump is fixed at 1220, not scanned by default
     herald_ch: int = TRIGG_CH,
     min_counts: float = 10,
