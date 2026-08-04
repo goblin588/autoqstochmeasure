@@ -168,7 +168,9 @@ def _save_results(rows, N, label):
     meta = {
         'N': N,
         'label': label,
-        'delays_ns': delays_for(N),
+        # keyed by real channel number — delays_for()'s list is 0-indexed
+        # (index 7 = ch8's delay), which reads as off-by-one in raw JSON
+        'delays_ns': {ch: d for ch, d in enumerate(delays_for(N), start=1) if ch in st.CHANNELS},
         'thresholds_v': st.THRESHOLDS,
         'coincidence_window_ns': st.COINCIDENCE_WINDOW,
         'det_chs': st.det_chs_for(N),
