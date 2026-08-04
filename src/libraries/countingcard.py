@@ -262,8 +262,10 @@ def tune_delays(
 
                 if window <= min_window:
                     break
-                scan_span /= 2
                 scan_step = max(scan_step / 2, min_step)
+                # span shrinks faster than step/window — re-centring on the
+                # best point each pass means it doesn't need to stay wide
+                scan_span = max(scan_span / 4, scan_step * 2)
                 window = max(window / 2, min_window)
 
             if best != current:
