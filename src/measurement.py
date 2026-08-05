@@ -306,15 +306,51 @@ def _input_states(N):
                   if k.endswith(f'_{N}'))
 
 def _ask_duration():
-    """Total collection time in seconds per setting, or None to stream until Ctrl-C."""
+    """Collection time in seconds per setting (input state x basis), or None
+    to stream until Ctrl-C."""
     while True:
-        m = input("Collect for how many minutes? (Enter = stream until Ctrl-C): ").strip()
+        m = input("Collect for how many minutes per setting? (Enter = stream until Ctrl-C): ").strip()
         if not m:
             return None
         try:
             return float(m) * 60
         except ValueError:
             print("Enter a number of minutes, or press Enter to stream")
+
+
+def _format_duration(seconds):
+    h, rem = divmod(int(seconds), 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}h {m}m {s}s"
+
+
+def _apply_setting(N, j, basis):
+    _set_input_state(N, j)
+    if basis is not None:
+        _set_tomo_stages(HWP=HWP_TOM_1, QWP=QWP_TOM_1, basis=basis)
+        _set_tomo_stages(HWP=HWP_TOM_DUMP, QWP=QWP_TOM_DUMP, basis=basis)
+
+
+def _should_round_robin(total, n_settings):
+    """True once a multi-setting run's total wall time passes
+    st.ROUND_ROBIN_THRESHOLD_S. total=None (stream until Ctrl-C) never
+    round-robins — there's no budget to interleave."""
+    return (total is not None and n_settings > 1
+            and total * n_settings > st.ROUND_ROBIN_THRESHOLD_S)
+
+
+def _round_robin_plan(settings, total, bin_s):
+    """Yield (j, basis, chunk_seconds), cycling through `settings` in
+    bin_s-second chunks until each has collected `total` s."""
+    remaining = {s: total for s in settings}
+    while any(r > 0 for r in remaining.values()):
+        for s in settings:
+            if remaining[s] <= 0:
+                continue
+            chunk = min(bin_s, remaining[s])
+            yield (*s, chunk)
+            remaining[s] -= chunk
+
 
 def measurement(N, performTomo=False, js=None):
     """Collect statistics through unitary N, one row per st.MEASUREMENT_INTEGRATION_S seconds.
@@ -323,37 +359,59 @@ def measurement(N, performTomo=False, js=None):
     performTomo=True  : full 6-basis tomo sweep
     js                : input states to repeat for (list of j). None = [0] (s0 only).
 
-    Asks for a total collection time per setting; Enter streams until Ctrl-C.
-    Everything goes to one file; rows carry an input_state column (= j).
+    Asks for a collection time per setting (input state x basis); Enter
+    streams until Ctrl-C. When there's more than one setting and the total
+    run would exceed st.ROUND_ROBIN_THRESHOLD_S, settings are interleaved in
+    st.ROUND_ROBIN_COLLECTION_TIME_S bins (round-robin) rather than run to
+    completion one at a time, so slow drift doesn't bias one setting more
+    than another. Everything goes to one file; rows carry an input_state
+    column (= j).
     Returns the list of result rows so callers can aggregate.
     """
     _maybe_calibrate()
+
+    js = js if js is not None else [0]
+    bases = ['H', 'V', 'A', 'D', 'R', 'L'] if performTomo else [None]
+    settings = [(j, b) for j in js for b in bases]
+
     total = _ask_duration()
+    round_robin = _should_round_robin(total, len(settings))
+    if total is not None:
+        print(f"This measurement will take {_format_duration(total * len(settings))}.")
+        if round_robin:
+            print(f"  (over {_format_duration(st.ROUND_ROBIN_THRESHOLD_S)} total — "
+                  f"round-robin across settings in {_format_duration(st.ROUND_ROBIN_COLLECTION_TIME_S)} bins)")
+        input("Press Enter to begin measurement... ")
+
     _set_unitary(N)
     _remind_switch_dwell(N)
     start = time.monotonic()
 
-    js = js if js is not None else [0]
-    bases = ['H', 'V', 'A', 'D', 'R', 'L'] if performTomo else [None]
     rows = []
     print("\n\n")
-    try:
-        for j in js:
-            _set_input_state(N, j)
-            for basis in bases:
-                if basis is not None:
-                    _set_tomo_stages(HWP=HWP_TOM_1, QWP=QWP_TOM_1, basis=basis)
-                    _set_tomo_stages(HWP=HWP_TOM_DUMP, QWP=QWP_TOM_DUMP, basis=basis)
 
-                try:
-                    for counts in _acquire_rows(N, total):
-                        rows.append({'N': N, 'input_state': j, 'basis': basis,
-                                     'time': datetime.datetime.now().isoformat(),
-                                     **counts})
-                        print(f"[s{j} {basis or 'no-tomo'}] {counts}", end="\r", flush=True)
-                except KeyboardInterrupt:
-                    print("\nStopped — saving what we have")
-                    return rows  # finally below still saves + notifies
+    def collect(j, basis, duration):
+        for counts in _acquire_rows(N, duration):
+            rows.append({'N': N, 'input_state': j, 'basis': basis,
+                         'time': datetime.datetime.now().isoformat(),
+                         **counts})
+            print(f"[s{j} {basis or 'no-tomo'}] {counts}", end="\r", flush=True)
+
+    try:
+        if not round_robin:
+            for j in js:
+                _set_input_state(N, j)
+                for basis in bases:
+                    if basis is not None:
+                        _set_tomo_stages(HWP=HWP_TOM_1, QWP=QWP_TOM_1, basis=basis)
+                        _set_tomo_stages(HWP=HWP_TOM_DUMP, QWP=QWP_TOM_DUMP, basis=basis)
+                    collect(j, basis, total)
+        else:
+            for j, basis, chunk in _round_robin_plan(settings, total, st.ROUND_ROBIN_COLLECTION_TIME_S):
+                _apply_setting(N, j, basis)
+                collect(j, basis, chunk)
+    except KeyboardInterrupt:
+        print("\nStopped — saving what we have")
     finally:
         # runs on success, error, or Ctrl-C — partial data still gets saved
         label = 'all' if js == _input_states(N) else '-'.join(map(str, js)) if len(js) > 1 else js[0]
