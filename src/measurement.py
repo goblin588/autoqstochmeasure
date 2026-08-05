@@ -316,13 +316,12 @@ def _ask_duration():
         except ValueError:
             print("Enter a number of minutes, or press Enter to stream")
 
-def measurement(N, performTomo=False, allInputs=False):
+def measurement(N, performTomo=False, js=None):
     """Collect statistics through unitary N, one row per st.MEASUREMENT_INTEGRATION_S seconds.
 
     performTomo=False : collect at the current analyzer setting
     performTomo=True  : full 6-basis tomo sweep
-    allInputs=False   : s0 input only
-    allInputs=True    : repeat for every input state s{j}_N
+    js                : input states to repeat for (list of j). None = [0] (s0 only).
 
     Asks for a total collection time per setting; Enter streams until Ctrl-C.
     Everything goes to one file; rows carry an input_state column (= j).
@@ -334,7 +333,7 @@ def measurement(N, performTomo=False, allInputs=False):
     _remind_switch_dwell(N)
     start = time.monotonic()
 
-    js = _input_states(N) if allInputs else [0]
+    js = js if js is not None else [0]
     bases = ['H', 'V', 'A', 'D', 'R', 'L'] if performTomo else [None]
     rows = []
     print("\n\n")
@@ -357,7 +356,8 @@ def measurement(N, performTomo=False, allInputs=False):
                     return rows  # finally below still saves + notifies
     finally:
         # runs on success, error, or Ctrl-C — partial data still gets saved
-        _save_results(rows, N, 'all' if allInputs else 0)
+        label = 'all' if js == _input_states(N) else '-'.join(map(str, js)) if len(js) > 1 else js[0]
+        _save_results(rows, N, label)
         notify(f"Measurement N={N} done ({len(rows)} rows)",
                title="Measurement Complete", priority="high")
         if time.monotonic() - start > 300:
@@ -509,30 +509,13 @@ def perform_tomo():
 
 
 def _stream_channel(channel, duration, label=None):
-    """SIM_MODE guard + stream_herald_and_signal call, shared by read_outputs
-    and check_projector."""
+    """SIM_MODE guard + stream_herald_and_signal call, used by check_projector."""
     tag = f" ({label})" if label else ""
     if SIM_MODE:
         print(f"[SIM MODE] would stream ch{channel}{tag} with delays {delays_for()}")
         return
     from libraries.countingcard import stream_herald_and_signal
     stream_herald_and_signal(signal_ch=channel, duration=duration, delays=delays_for())
-
-
-def read_outputs(duration=None):
-    """Stream one output channel live: singles + coincidences with the herald.
-    All delays are fixed now, so no unitary N is needed."""
-    options = [(TRIGG_CH, 'herald'),
-               *[(ch, f'loop{i + 1}') for i, ch in enumerate(LOOP_CHS)],
-               (DUMP_CH, 'dump')]
-    menu = '\n'.join(f'\t{i}. {label} (ch{ch})' for i, (ch, label) in enumerate(options, 1))
-    choice = input(f"Which channel?\n{menu}\n> ").strip()
-    try:
-        ch, label = options[int(choice) - 1]
-    except (ValueError, IndexError):
-        print(f"Pick a number 1-{len(options)}")
-        return
-    _stream_channel(ch, duration, label)
 
 
 def _ask_basis(prompt):
@@ -666,16 +649,13 @@ def main():
         n = input(
             "Do you want to:\n"
             "\t1. Set unitary and s0 input state\n"
-            "\t2. Collect statistics without tomo\n"
-            "\t3. Collect statistics with output tomo\n"
-            "\t4. Collect statistics for each input s_j\n"
-            "\t5. Test antilatch server connection\n"
-            "\t6. Stream a channel\n"
-            "\t7. Tune channel delays (zooms in to a precise value)\n"
-            "\t8. Unlatch detectors (antilatch only, card untouched)\n"
-            "\t9. Perform tomography (photon counting) + plot\n"
-            "\t10. Check single input/output projector (phase tuning)\n"
-            "\t11. Calibrate background noise (block/herald/setup, 3 steps)\n"
+            "\t2. Collect statistics\n"
+            "\t3. Test antilatch server connection\n"
+            "\t4. Tune channel delays (zooms in to a precise value)\n"
+            "\t5. Unlatch detectors (antilatch only, card untouched)\n"
+            "\t6. Perform tomography (photon counting) + plot\n"
+            "\t7. Check single input/output projector (phase tuning)\n"
+            "\t8. Calibrate background noise (block/herald/setup, 3 steps)\n"
             )
 
         match n:
@@ -685,16 +665,26 @@ def main():
                 _set_unitary(N)
                 _set_input_state(N, 0)
             case '2':
-                measurement(_ask_N())
+                N = _ask_N()
+                states_choice = input(
+                    "Input state(s):\n"
+                    "\t1. Single\n"
+                    "\t2. Multiple (choose specific s_j's)\n"
+                    "\t3. All\n"
+                    "> ").strip()
+                if states_choice == '2':
+                    raw = input(f"Which j's, comma-separated (available: {_input_states(N)}): ").strip()
+                    js = [int(j) for j in raw.split(',')] if raw else [0]
+                elif states_choice == '3':
+                    js = _input_states(N)
+                else:
+                    j = input("Which j? (Enter = 0): ").strip()
+                    js = [int(j)] if j else [0]
+                tomo = input("Perform output tomo? [y/N] ").strip().lower() == 'y'
+                measurement(N, performTomo=tomo, js=js)
             case '3':
-                measurement(_ask_N(), performTomo=True)
-            case '4':
-                measurement(_ask_N(), allInputs=True)
-            case '5':
                 ping_antilatch()
-            case '6':
-                read_outputs()
-            case '7':
+            case '4':
                 if SIM_MODE:
                     print("[SIM MODE] delay tuning needs hardware")
                 else:
@@ -713,7 +703,7 @@ def main():
                         integration_time=float(t) if t else 10.0,
                         dump_N=dump_N,
                     )
-            case '8':
+            case '5':
                 if SIM_MODE:
                     print("[SIM MODE] no detectors to unlatch")
                 else:
@@ -722,14 +712,14 @@ def main():
                     from hardware.detector import reset_detectors
                     if reset_detectors():
                         print("Detectors unlatched (bias voltages cycled)")
-            case '9':
+            case '6':
                 perform_tomo()
-            case '10':
+            case '7':
                 check_projector()
-            case '11':
+            case '8':
                 calibrate_background()
             case _:
-                print("Please choose a valid option 1-11 from list:")
+                print("Please choose a valid option 1-8 from list:")
 
 
 if __name__ == "__main__":
