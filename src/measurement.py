@@ -109,15 +109,15 @@ def _sim_row(duration, chs=DET_CHS):
             'int_time': duration}
 
 def _acquire_counts(duration, N):
-    """Integrate counts for `duration` s on loop channels 1..N + dump, with
-    delays (incl. dump-after-N) for process N."""
+    """Integrate counts for `duration` s on every loop channel + dump — the
+    photon always runs all 6 loops before dumping, regardless of process N."""
     chs = st.det_chs_for(N)
     if SIM_MODE:
         return _sim_row(duration, chs)
     # imported here: hardware.detector loads the TimeTag DLL on import,
     # which doesn't exist in sim mode
     from libraries.countingcard import acquire_counts
-    return acquire_counts(duration, signal_chs=chs, delays=delays_for(N))
+    return acquire_counts(duration, signal_chs=chs, delays=delays_for())
 
 def _acquire_rows(N, total):
     """Yield count rows, each integrated for st.MEASUREMENT_INTEGRATION_S
@@ -131,7 +131,7 @@ def _acquire_rows(N, total):
             done += integration
         return
     from libraries.countingcard import acquire_rows
-    yield from acquire_rows(total, integration=integration, signal_chs=chs, delays=delays_for(N))
+    yield from acquire_rows(total, integration=integration, signal_chs=chs, delays=delays_for())
 
 def _git_commit():
     """Best-effort short git commit hash of the running code, for
@@ -170,7 +170,7 @@ def _save_results(rows, N, label):
         'label': label,
         # keyed by real channel number — delays_for()'s list is 0-indexed
         # (index 7 = ch8's delay), which reads as off-by-one in raw JSON
-        'delays_ns': {ch: d for ch, d in enumerate(delays_for(N), start=1) if ch in st.CHANNELS},
+        'delays_ns': {ch: d for ch, d in enumerate(delays_for(), start=1) if ch in st.CHANNELS},
         'thresholds_v': st.THRESHOLDS,
         'coincidence_window_ns': st.COINCIDENCE_WINDOW,
         'det_chs': st.det_chs_for(N),
@@ -753,7 +753,9 @@ def main():
                     signal_chs = [int(c) for c in chs.split(',')] if chs else LOOP_CHS
                     dump_N = None
                     if DUMP_CH in signal_chs:
-                        dump_N = int(input("Dump delay is per-N — which N is this for? ").strip())
+                        dump_N = int(input(f"Dump delay is per-loop-count — how many loops before dump? "
+                                            f"(Enter = {len(LOOP_CHS)}, the dump-at-the-end default used "
+                                            f"by stats collection): ").strip() or len(LOOP_CHS))
                     t = input("Integration time per point, in seconds "
                               "(default 10; raise for channels that won't show a peak): ").strip()
                     tune_delays(
