@@ -162,7 +162,7 @@ def tune_delays(
     step: float = 1.0,
     span: float = 10.0,
     integration_time: float = 10.0,
-    signal_chs: list = LOOP_CHS,  # dump is fixed at 1220, not scanned by default
+    signal_chs: list = LOOP_CHS,  # dump is parked (see settings.CHANNELS), not scanned by default
     herald_ch: int = TRIGG_CH,
     min_counts: float = 10,
     background_offset: float = -30.0,
@@ -191,10 +191,12 @@ def tune_delays(
     (loaded over the hardcoded defaults on import).
 
     Pass dump_N to also tune the dump channel (ch7) — include DUMP_CH in
-    signal_chs and give the process length N it's being tuned for. The
-    dump's delay is N-dependent (settings.DUMP_DELAYS[N], not
-    settings.CHANNELS) since it depends on how many loops ran before the
-    dump, so it's written there instead of CHANNELS on convergence.
+    signal_chs and give the loop count it's being tuned for. The result is
+    written to settings.DUMP_DELAYS[dump_N] (that table's per-loop-count
+    entries feed the path-2 tomo checks), not settings.CHANNELS. When
+    dump_N is the max loop count (len(LOOP_CHS), i.e. dump-at-the-end —
+    ordinary stats collection's parked default), it's also written to
+    settings.CHANNELS[DUMP_CH] so delays_for()'s default picks it up.
 
     The session's coincidence window is left at `experiment_window` ns
     (the tight window used for tuning is only for locating the delay
@@ -272,6 +274,9 @@ def tune_delays(
                 if ch == DUMP_CH and dump_N is not None:
                     st.DUMP_DELAYS[dump_N] = best
                     dest = f"DUMP_DELAYS[{dump_N}]"
+                    if dump_N == len(LOOP_CHS):  # dump-at-the-end: also update the live parked default
+                        st.CHANNELS[DUMP_CH]['delay'] = best
+                        dest += f" + CHANNELS[{DUMP_CH}] (parked default)"
                 else:
                     st.CHANNELS[ch]['delay'] = best
                     dest = f"CHANNELS[{ch}]"
