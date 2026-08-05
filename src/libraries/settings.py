@@ -49,8 +49,8 @@ for _name, _cfg in WAVEPLATES.items():
 # Herald on ch3; loop-k "1" outputs on ch2/4/6/8/10/12; dump on ch7.
 # Back to the old method again: every run reads every loop channel and lets
 # the photon complete all 6 physical loops before dumping, regardless of the
-# nominal process N — the dump is parked at DUMP_DELAYS[len(LOOP_CHS)]
-# instead of switching per N. See det_chs_for()/delays_for().
+# nominal process N — the dump's delay is just CHANNELS[7]['delay'], fixed
+# and tuned like any other channel (see tune_delays). See det_chs_for().
 TRIGG_CH = 3
 LOOP_CHS = [2, 4, 6, 8, 10, 12]  # loop 1..6
 DUMP_CH = 7
@@ -66,11 +66,13 @@ CHANNELS = {
 }
 # "Dump After" column of the calibration table — dump channel delay if the
 # photon is dumped having completed k loops (0 = herald row, straight to
-# dump). delays_for() always uses DUMP_DELAYS[len(LOOP_CHS)] (dump-after-6);
-# path-2 tomo (_tomo_path2/check_projector) does the direct-swap version at
-# a chosen loop count for phase-tuning checks. DUMP_DELAYS[6]=790 is not yet
-# calibrated — it's a linear extrapolation of the ~430 ns/loop step seen in
-# 0-5; run tune_delays(dump_N=6) (menu option 4) to get a measured value.
+# dump). Only used directly by path-2 tomo (_tomo_path2/check_projector),
+# which swaps CHANNELS[DUMP_CH]['delay'] to DUMP_DELAYS[k] for a chosen
+# loop count during phase-tuning checks, then restores it. Ordinary stats
+# collection ignores this table — the dump is fixed at CHANNELS[DUMP_CH]
+# (see tune_delays, menu option 4) regardless of process N.
+# DUMP_DELAYS[6]=790 is not yet calibrated — it's a linear extrapolation of
+# the ~430 ns/loop step seen in 0-5.
 DUMP_DELAYS = {0: 3390, 1: 2954, 2: 2523, 3: 2088, 4: 1656, 5: 1223, 6: 790}
 
 # "Switch Dwell" column — the photon switch's dwell time isn't under this
@@ -101,17 +103,12 @@ def save_calibration():
     print(f"Saved calibration -> {CAL_FILE}")
 
 def delays_for(N=None):
-    """Full delay list. Loop-channel delays are fixed; the dump stays at its
-    parked CHANNELS default (dump-after-6, see DUMP_DELAYS) unless N is
-    given, which swaps in DUMP_DELAYS[N] instead — used by tune_delays and
-    the path-2 tomo checks to seed/probe the dump at a specific loop count.
-    Ordinary stats collection calls this with no N, so every run dumps at
-    the same fixed point regardless of the process being measured."""
+    """Full delay list, every channel fixed (dump included — it's parked at
+    dump-after-6, see DUMP_DELAYS). N is accepted (and ignored) so existing
+    call sites that still pass a unitary N keep working unchanged."""
     d = [0.0] * max(CHANNELS)
     for ch, cfg in CHANNELS.items():
         d[ch - 1] = cfg['delay']
-    if N is not None:
-        d[DUMP_CH - 1] = DUMP_DELAYS[int(N)]
     return d
 
 def det_chs_for(N=None):
