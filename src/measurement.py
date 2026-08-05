@@ -374,14 +374,17 @@ def measurement(N, performTomo=False, js=None):
     bases = ['H', 'V', 'A', 'D', 'R', 'L'] if performTomo else [None]
     settings = [(j, b) for j in js for b in bases]
 
-    total = _ask_duration()
-    round_robin = _should_round_robin(total, len(settings))
-    if total is not None:
+    while True:
+        total = _ask_duration()
+        round_robin = _should_round_robin(total, len(settings))
+        if total is None:
+            break
         print(f"This measurement will take {_format_duration(total * len(settings))}.")
         if round_robin:
             print(f"  (over {_format_duration(st.ROUND_ROBIN_THRESHOLD_S)} total — "
                   f"round-robin across settings in {_format_duration(st.ROUND_ROBIN_COLLECTION_TIME_S)} bins)")
-        input("Press Enter to begin measurement... ")
+        if input("Press Enter to begin, or c to change the duration: ").strip().lower() != 'c':
+            break
 
     _set_unitary(N)
     _remind_switch_dwell(N)
