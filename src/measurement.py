@@ -380,9 +380,6 @@ def measurement(N, performTomo=False, js=None):
         if total is None:
             break
         print(f"This measurement will take {_format_duration(total * len(settings))}.")
-        if round_robin:
-            print(f"  (over {_format_duration(st.ROUND_ROBIN_THRESHOLD_S)} total — "
-                  f"round-robin across settings in {_format_duration(st.ROUND_ROBIN_COLLECTION_TIME_S)} bins)")
         if input("Press Enter to begin, or c to change the duration: ").strip().lower() != 'c':
             break
 
