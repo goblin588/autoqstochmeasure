@@ -71,7 +71,7 @@ CHANNELS = {
 # a chosen loop count for phase-tuning checks. DUMP_DELAYS[6]=790 is not yet
 # calibrated — it's a linear extrapolation of the ~430 ns/loop step seen in
 # 0-5; run tune_delays(dump_N=6) (menu option 4) to get a measured value.
-DUMP_DELAYS = {0: 3390, 1: 2954, 2: 2523, 3: 2084, 4: 1656, 5: 1223, 6: 790}
+DUMP_DELAYS = {0: 3390, 1: 2954, 2: 2523, 3: 2088, 4: 1656, 5: 1223, 6: 790}
 
 # "Switch Dwell" column — the photon switch's dwell time isn't under this
 # program's control, so this is just what to tell the operator to set it to
