@@ -122,6 +122,13 @@ COINCIDENCE_CHS = [[TRIGG_CH, ch] for ch in DET_CHS]
 COINCIDENCE_WINDOW = 2.0  # ns — keep within 1-3; tune_delays sets this to 1.5 ns after tuning
 MEASUREMENT_INTEGRATION_S = 20.0  # seconds per row in measurement(); raise if 1 s rows are too noisy
 
+# measurement()'s default for longer multi-setting runs: above ROUND_ROBIN_THRESHOLD_S
+# total, settings (state x basis) are interleaved in ROUND_ROBIN_COLLECTION_TIME_S bins
+# instead of run to completion one at a time, so slow drift doesn't bias one setting
+# more than another.
+ROUND_ROBIN_COLLECTION_TIME_S = 20 * 60
+ROUND_ROBIN_THRESHOLD_S = 60 * 60
+
 # ANTILATCH SERVER (detector bias reset over TCP, see detector-antilatch-server/)
 # These voltages are what actually get applied on reset — the server ignores its
 # own config.py when driven from here. Keep in sync with
