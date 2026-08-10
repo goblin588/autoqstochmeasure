@@ -1,5 +1,6 @@
 from hardware.detector import Logic16
-from libraries.settings import TRIGG_CH, DET_CHS, DUMP_CH, LOOP_CHS, COINCIDENCE_WINDOW, DELAYS, THRESHOLDS
+from libraries.settings import (TRIGG_CH, DET_CHS, DUMP_CH, LOOP_CHS, COINCIDENCE_WINDOW,
+                                 DELAYS, THRESHOLDS, BACKGROUND_OFFSET_NS)
 import numpy as np
 
 def acquire_counts(
@@ -168,7 +169,7 @@ def tune_delays(
     signal_chs: list = LOOP_CHS,  # dump is parked (see settings.CHANNELS), not scanned by default
     herald_ch: int = TRIGG_CH,
     min_counts: float = 10,
-    background_offset: float = 15.0,
+    background_offset: float = BACKGROUND_OFFSET_NS,
     background_samples: int = 10,
     min_step: float = 0.1,
     experiment_window: float = 1.5,

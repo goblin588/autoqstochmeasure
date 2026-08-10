@@ -204,13 +204,6 @@ def _calibration_date(path):
     return json.loads(path.read_text())['saved_at']
 
 
-def _countdown_from(n=3):
-    for i in range(n, 0, -1):
-        print(i, end=' ', flush=True)
-        time.sleep(1)
-    print('- recording')
-
-
 def _ask_calibration_duration():
     while True:
         s = input("Integration time per calibration step, in seconds (default 60): ").strip()
@@ -222,52 +215,42 @@ def _ask_calibration_duration():
             print("Enter a number of seconds")
 
 
-def _acquire_counts_all(duration):
+def _acquire_counts_all(duration, delays=None):
     """Coincidence/singles counts on every detector channel — not scoped to
     a process N, since background calibration isn't tied to a unitary."""
     if SIM_MODE:
         return _sim_row(duration, DET_CHS)
     from libraries.countingcard import acquire_counts
-    return acquire_counts(duration, signal_chs=DET_CHS, delays=delays_for())
-
-
-CALIBRATION_STEPS = [
-    ('both_blocked',   "Block BOTH paths — herald and signal — at the source"),
-    ('herald_blocked', "Unblock the signal path; block the HERALD only"),
-    ('setup_blocked',  "Unblock the herald; block the SIGNAL path only (setup blocked)"),
-]
+    return acquire_counts(duration, signal_chs=DET_CHS,
+                           delays=delays if delays is not None else delays_for())
 
 
 def calibrate_background():
-    """Measure per-channel coincidence/singles background under three
-    blocking configurations, so real runs can subtract a validated noise
-    floor instead of curve-fitting one against theory.
-
-    background_rate_hz is taken from the 'setup_blocked' step (herald firing
-    normally, signal blocked) — that's the config that matches a real run's
-    out-of-support channels: a live herald, but no real signal reaching that
-    detector. 'both_blocked' and 'herald_blocked' are saved alongside it for
-    reference, not currently used downstream.
+    """Per-channel background/accidental coincidence rate: every channel's
+    delay is bumped +st.BACKGROUND_OFFSET_NS ns off its tuned value (herald
+    left alone), so the coincidence window misses the real photon arrival
+    and only counts accidentals — no physical beam blocking needed.
 
     Saves data/{timestamp}_noise_calibration.json.
     """
     duration = _ask_calibration_duration()
-    results = {}
-    for key, instruction in CALIBRATION_STEPS:
-        input(f"\n{instruction}, then press Enter...")
-        _countdown_from(3)
-        counts = _acquire_counts_all(duration)
-        results[key] = counts
-        print(f"  {key}: {counts}")
+    delays = delays_for()
+    for ch in DET_CHS:
+        delays[ch - 1] += st.BACKGROUND_OFFSET_NS
+    print(f"Measuring background at +{st.BACKGROUND_OFFSET_NS:.0f} ns off every channel's "
+          f"tuned delay, {duration:.0f}s...")
+    counts = _acquire_counts_all(duration, delays)
+    print(f"  {counts}")
 
-    int_time = results['setup_blocked']['int_time']
+    int_time = counts['int_time']
     background_rate_hz = {
-        str(ch): results['setup_blocked'].get(f'coinc_ch{ch}', 0) / int_time
+        str(ch): counts.get(f'coinc_ch{ch}', 0) / int_time
         for ch in DET_CHS
     }
 
     calibration = {
-        'steps': results,
+        'counts': counts,
+        'offset_ns': st.BACKGROUND_OFFSET_NS,
         'background_rate_hz': background_rate_hz,
         'duration_s': duration,
         'saved_at': datetime.datetime.now().isoformat(),
@@ -278,7 +261,7 @@ def calibrate_background():
     with open(f"{stem}.json", 'w') as f:
         json.dump(calibration, f, indent=1)
     print(f"\nSaved calibration -> {stem}.json")
-    print(f"background_rate_hz (from setup_blocked): {background_rate_hz}")
+    print(f"background_rate_hz: {background_rate_hz}")
     notify("Background calibration done", title="Calibration Complete")
     return calibration
 
