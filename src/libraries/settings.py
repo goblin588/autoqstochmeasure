@@ -124,6 +124,8 @@ COINCIDENCE_CHS = [[TRIGG_CH, ch] for ch in DET_CHS]
 COINCIDENCE_WINDOW = 2.0  # ns — keep within 1-3; tune_delays sets this to 1.5 ns after tuning
 MEASUREMENT_INTEGRATION_S = 1.0  # seconds per row in measurement(); raise if 1 s rows are too noisy
 
+BACKGROUND_OFFSET_NS = 15.0  # off a channel's tuned delay = misses the real photon, counts accidentals only
+
 # tune_delays' per-channel integration time (s): later loops lose more photons,
 # so their coincidence peak needs longer collection to clear the noise floor.
 # Anchored on ch2 (~1.5 s, plenty of signal) and ch12 (~15 s, barely any left);
