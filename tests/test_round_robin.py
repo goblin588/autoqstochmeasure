@@ -1,6 +1,7 @@
 """Sanity check for measurement()'s round-robin scheduling: the threshold
 decision and the interleaving/budget math, both pure and hardware-free."""
-from measurement import _format_duration, _round_robin_plan, _should_round_robin
+import builtins
+from measurement import _ask_duration, _format_duration, _round_robin_plan, _should_round_robin
 
 
 def test_format_duration():
@@ -29,8 +30,21 @@ def test_round_robin_plan_cycles_and_sums_to_total():
     assert totals == {s: total for s in settings}
 
 
+def test_ask_duration_default_and_stream():
+    """Enter alone -> 20 min default; 0 -> stream until Ctrl-C (None); a
+    number -> that many minutes, in seconds."""
+    original_input = builtins.input
+    try:
+        for reply, expected in [("", 20 * 60), ("0", None), ("5", 300)]:
+            builtins.input = lambda _prompt, reply=reply: reply
+            assert _ask_duration() == expected
+    finally:
+        builtins.input = original_input
+
+
 if __name__ == "__main__":
     test_format_duration()
     test_should_round_robin_threshold()
     test_round_robin_plan_cycles_and_sums_to_total()
+    test_ask_duration_default_and_stream()
     print("ok")

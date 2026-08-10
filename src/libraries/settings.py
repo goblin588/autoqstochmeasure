@@ -122,7 +122,14 @@ DET_CHS = [*LOOP_CHS, DUMP_CH]
 SINGLE_DET_CHS = [TRIGG_CH, *DET_CHS]
 COINCIDENCE_CHS = [[TRIGG_CH, ch] for ch in DET_CHS]
 COINCIDENCE_WINDOW = 2.0  # ns — keep within 1-3; tune_delays sets this to 1.5 ns after tuning
-MEASUREMENT_INTEGRATION_S = 20.0  # seconds per row in measurement(); raise if 1 s rows are too noisy
+MEASUREMENT_INTEGRATION_S = 1.0  # seconds per row in measurement(); raise if 1 s rows are too noisy
+
+# tune_delays' per-channel integration time (s): later loops lose more photons,
+# so their coincidence peak needs longer collection to clear the noise floor.
+# Anchored on ch2 (~1.5 s, plenty of signal) and ch12 (~15 s, barely any left);
+# the channels between are a linear guess — tune these down/up as real noise
+# is observed. Dump (ch7) isn't a loop step so it just uses the flat fallback.
+TUNE_INTEGRATION_S = {2: 1.5, 4: 4.2, 6: 6.9, 8: 9.6, 10: 12.3, 12: 15.0}
 
 # measurement()'s default for longer multi-setting runs: above ROUND_ROBIN_THRESHOLD_S
 # total, settings (state x basis) are interleaved in ROUND_ROBIN_COLLECTION_TIME_S bins
