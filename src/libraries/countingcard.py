@@ -158,24 +158,37 @@ def stream_channels_with_delays(
             )
 
 
+TUNE_WINDOWS_NS = (3.0, 1.0, 0.5, 0.25)  # fixed zoom sequence — finer than 0.25 ns just chases noise
+
+
 def tune_delays(
     step: float = 1.0,
     span: float = 10.0,
-    integration_time: float = 10.0,
+    integration_time: float | None = None,
     signal_chs: list = LOOP_CHS,  # dump is parked (see settings.CHANNELS), not scanned by default
     herald_ch: int = TRIGG_CH,
     min_counts: float = 10,
-    background_offset: float = -30.0,
+    background_offset: float = 15.0,
     background_samples: int = 10,
     min_step: float = 0.1,
-    min_window: float = 0.2,
     experiment_window: float = 1.5,
+    windows: tuple = TUNE_WINDOWS_NS,
+    small_window_ns: float = 0.5,
 ):
     """Re-centre each signal channel's delay after drift, converging to a
     precise value by zooming in: scan ±span ns in `step` ns moves at the
     current coincidence window, re-centre on the best point, then halve
-    span, step and coincidence window and rescan — repeating until the
-    window bottoms out at `min_window` ns (step at `min_step` ns).
+    span/step and move to the next (narrower) window in `windows` —
+    repeating until `windows` runs out.
+
+    Windows below `small_window_ns` are noisiest (a single read often just
+    lands on a random bin), so those passes double the channel's integration
+    time rather than averaging repeat reads — simpler, same effect.
+
+    integration_time=None (default) looks up settings.TUNE_INTEGRATION_S per
+    channel — later loops have fewer surviving photons and need longer
+    collection to clear the noise floor. Pass a number to use it for every
+    channel instead (e.g. to override a channel missing a clear peak).
 
     ch2 is scanned first as a reference. After its first (coarsest) scan,
     background is measured `background_offset` ns off that peak (averaged
@@ -206,20 +219,25 @@ def tune_delays(
     min_bar = None
     background = None
     changes = {}
-    with Logic16(coincidence_window=COINCIDENCE_WINDOW, logic_mode=True,
-                 integration_window=integration_time) as logic:
-        logic.configure(threshold=THRESHOLDS, coincidence_window=COINCIDENCE_WINDOW)
-        print(f"Tuning {len(order)} channels, zooming from {step:.2g}/{COINCIDENCE_WINDOW:.2g} ns "
-              f"(step/window) down to {min_step:.2g}/{min_window:.2g} ns")
+    with Logic16(coincidence_window=windows[0], logic_mode=True,
+                 integration_window=integration_time or 10.0) as logic:
+        logic.configure(threshold=THRESHOLDS, coincidence_window=windows[0])
+        print(f"Tuning {len(order)} channels, zooming through windows {windows} ns "
+              f"(step from {step:.2g} ns, floor {min_step:.2g} ns)")
         for i, ch in enumerate(order, 1):
             delays = st.delays_for()
             current = delays[ch - 1]
-            print(f"[{i}/{len(order)}] scanning ch{ch} around {current:.0f} ns:", flush=True)
+            base_integration = integration_time if integration_time is not None \
+                else st.TUNE_INTEGRATION_S.get(ch, 10.0)
+            print(f"[{i}/{len(order)}] scanning ch{ch} around {current:.0f} ns "
+                  f"({base_integration:.2g}s/point):", flush=True)
 
             best = current
-            scan_span, scan_step, window = span, step, COINCIDENCE_WINDOW
+            scan_span, scan_step = span, step
             first_pass = True
-            while True:
+            for window in windows:
+                pass_integration = base_integration * (2 if window <= small_window_ns else 1)
+                logic.set_integration_window(pass_integration)
                 logic.set_coincidence_window(window)
                 offsets = np.arange(-scan_span, scan_span + scan_step / 2, scan_step)
                 counts = []
@@ -260,23 +278,20 @@ def tune_delays(
                         break
                     first_pass = False
 
-                if window <= min_window:
-                    break
                 scan_step = max(scan_step / 2, min_step)
                 # span shrinks faster than step/window — re-centring on the
                 # best point each pass means it doesn't need to stay wide
                 scan_span = max(scan_span / 4, scan_step * 2)
-                window = max(window / 2, min_window)
 
             if best != current:
                 st.CHANNELS[ch]['delay'] = best
                 print(f"ch{ch}: {current:.0f} -> {best:.2f} ns (CHANNELS[{ch}]), "
-                      f"peak {peak_counts:.0f} counts at {min_window:.2g} ns window", flush=True)
+                      f"peak {peak_counts:.0f} counts at {windows[-1]:.2g} ns window", flush=True)
             changes[ch] = (current, best)
 
         logic.set_coincidence_window(experiment_window)
     print(f"Coincidence window set to {experiment_window:.2g} ns for the experiment "
-          f"(tuning itself zoomed down to {min_window:.2g} ns for precision).")
+          f"(tuning itself zoomed down to {windows[-1]:.2g} ns for precision).")
     print(f"Background used for minimum-count bar: {background:.1f} counts/"
           f"{integration_time:.2g}s (avg of {background_samples} samples, "
           f"ch{ref_ch} at {background_offset:+.0f} ns off its peak) -> bar = {min_bar:.1f}")

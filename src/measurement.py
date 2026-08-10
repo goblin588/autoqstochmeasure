@@ -306,16 +306,18 @@ def _input_states(N):
                   if k.endswith(f'_{N}'))
 
 def _ask_duration():
-    """Collection time in seconds per setting (input state x basis), or None
-    to stream until Ctrl-C."""
+    """Collection time in seconds per setting (input state x basis).
+    Enter defaults to 20 min; 0 streams until Ctrl-C."""
     while True:
-        m = input("Collect for how many minutes per setting? (Enter = stream until Ctrl-C): ").strip()
+        m = input("Collect for how many minutes per setting? (Enter = 20, 0 = stream until Ctrl-C): ").strip()
         if not m:
-            return None
+            return 20 * 60
         try:
-            return float(m) * 60
+            minutes = float(m)
         except ValueError:
-            print("Enter a number of minutes, or press Enter to stream")
+            print("Enter a number of minutes, or press Enter for the 20 min default")
+            continue
+        return None if minutes == 0 else minutes * 60
 
 
 def _format_duration(seconds):
@@ -360,7 +362,7 @@ def measurement(N, performTomo=False, js=None):
     js                : input states to repeat for (list of j). None = [0] (s0 only).
 
     Asks for a collection time per setting (input state x basis); Enter
-    streams until Ctrl-C. When there's more than one setting and the total
+    defaults to 20 min, 0 streams until Ctrl-C. When there's more than one setting and the total
     run would exceed st.ROUND_ROBIN_THRESHOLD_S, settings are interleaved in
     st.ROUND_ROBIN_COLLECTION_TIME_S bins (round-robin) rather than run to
     completion one at a time, so slow drift doesn't bias one setting more
@@ -753,10 +755,11 @@ def main():
                                 f"fixed regardless of process N): ").strip()
                     signal_chs = [int(c) for c in chs.split(',')] if chs else LOOP_CHS
                     t = input("Integration time per point, in seconds "
-                              "(default 10; raise for channels that won't show a peak): ").strip()
+                              "(Enter = per-channel default, ch2 ~1.5s up to ch12 ~15s; "
+                              "or type a number to use it for every channel): ").strip()
                     tune_delays(
                         signal_chs=signal_chs,
-                        integration_time=float(t) if t else 10.0,
+                        integration_time=float(t) if t else None,
                     )
             case '5':
                 if SIM_MODE:

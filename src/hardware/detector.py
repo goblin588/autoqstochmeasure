@@ -141,6 +141,9 @@ class Logic16:
         # counts in the buffer were taken under the old window
         self.clear_buffer()
 
+    def set_integration_window(self, seconds):
+        self._integration_window = seconds
+
     def get_status(self):
         msg = '>>> Logic16 counting card\n'
         msg += '> FPGA version:\t\t{}\n'.format(self.MyTagger.GetFpgaVersion())
