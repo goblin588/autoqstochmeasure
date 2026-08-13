@@ -307,6 +307,63 @@ def tune_delays(
         print("Not saved — tuned delays apply for this session only.")
 
 
+def scan_and_record(
+    ch: int,
+    center: float | None = None,
+    span: float = 3.0,
+    step: float = 0.5,
+    absolute_range: tuple | None = None,   # e.g. (0.0, 20.0) for a cold scan with no prior delay
+    scan_integration: float = 2.0,
+    record_duration: float = 60.0,
+    herald_ch: int = TRIGG_CH,
+):
+    """Single-pass delay scan for `ch` (no zoom levels, unlike tune_delays),
+    then a full-length recording at the best delay found.
+
+    Offsets come from `absolute_range=(lo, hi)` if given (cold scan over an
+    absolute range), else from `center` +/- `span` in `step` steps (mini
+    sweep around an already-known-good delay).
+
+    Opens one Logic16 context for both the scan and the final recording —
+    mirrors tune_delays, never reopens the card per point.
+
+    Returns (best_delay, row) where row has acquire_counts()'s dict shape:
+    {'herald', 'singles_ch{ch}', 'coinc_ch{ch}', 'int_time'}.
+    """
+    import libraries.settings as st
+    offsets = (np.arange(absolute_range[0], absolute_range[1] + step / 2, step)
+               if absolute_range is not None
+               else center + np.arange(-span, span + step / 2, step))
+
+    delays = st.delays_for()
+    best_delay, best_counts = delays[ch - 1], -1.0
+    with Logic16(coincidence_window=COINCIDENCE_WINDOW, logic_mode=True,
+                 integration_window=scan_integration) as logic:
+        logic.configure(threshold=THRESHOLDS, coincidence_window=COINCIDENCE_WINDOW)
+        for d in offsets:
+            delays[ch - 1] = float(d)
+            logic.set_delays(delays)
+            c, s, t = logic.read_counts_integrated(
+                pos_singles=[herald_ch, ch], pos_coincidence=[[herald_ch, ch]])
+            rate = c[0] / t if t > 0 else 0.0
+            print(f"  {d:+7.2f} ns: {c[0]:6.0f} coinc ({rate:6.1f} Hz)  "
+                  f"herald {s[0]:6.0f}  ch{ch} {s[1]:6.0f}")
+            if c[0] > best_counts:
+                best_counts, best_delay = c[0], float(d)
+
+        print(f"  best: {best_delay:+.2f} ns ({best_counts:.0f} coinc) — "
+              f"recording {record_duration:.0f}s...")
+        delays[ch - 1] = best_delay
+        logic.set_delays(delays)
+        logic.set_integration_window(record_duration)
+        c, s, int_time = logic.read_counts_integrated(
+            pos_singles=[herald_ch, ch], pos_coincidence=[[herald_ch, ch]])
+
+    row = {'herald': int(s[0]), f'singles_ch{ch}': int(s[1]),
+           f'coinc_ch{ch}': int(c[0]), 'int_time': int_time}
+    return best_delay, row
+
+
 # rework to be a delay optimizer if given an initial delay should just move up and down by +/- 30ns and check, also check coincidence windows between 5-1ns and chose smallest window with max counts
 def find_delay_window(
     herald_ch: int = TRIGG_CH,
