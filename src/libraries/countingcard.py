@@ -377,54 +377,46 @@ def scan_and_record(
 
 def measure_background(
     ch: int,
+    peak_delay: float,
     herald_ch: int = TRIGG_CH,
     herald_delay: float = 10.0,
-    lo: float = 0.0,
-    hi: float = 20.0,
-    step: float = 2.0,
+    offset: float = BACKGROUND_OFFSET_NS,
     integration: float = 2.0,
 ):
     """Accidental-coincidence floor for a raw (no-setup) baseline channel:
-    herald pinned to `herald_delay` (10ns) and `ch` swept lo..hi ns (0..20ns)
-    — both far from any real tuned delay (hundreds to thousands of ns), so
-    every scan point misses the true photon-arrival alignment and only
-    counts accidentals. The herald-ch relative offset still spans the same
-    +/-10ns window either way — this hardware just can't take a negative
-    delay, so both are shifted up by 10ns instead of centering on 0.
-    Returns the mean rate across the scan (robust to a single point landing
-    on a stray peak, e.g. electronic crosstalk).
+    one read at `peak_delay + offset` (default +15ns — same
+    BACKGROUND_OFFSET_NS convention as calibrate_background/tune_delays),
+    far enough off the real coincidence peak found by scan_and_record to
+    miss it and count only accidentals. Not a scan — a single point.
 
-    Unlike tune_delays' background check (which offsets a small amount from
-    an already-tuned real delay), this is for stages that have no tuned
-    delay to offset from — a fresh source/dump baseline reading.
+    herald pinned to `herald_delay`, matching the value scan_and_record used
+    to find `peak_delay` in the first place (this ad hoc, no-setup
+    connection doesn't use the setup's normal calibrated herald delay).
 
-    Returns (mean_rate_hz, points) — points is every raw scan point, not
-    just the mean, so the run can be reprocessed independently later:
-    [{'offset_ns', 'coinc', 'herald_singles', 'ch_singles', 'int_time',
-      'rate_hz'}, ...].
+    Returns (rate_hz, point) — point is the raw single-point record so it
+    can be reprocessed independently later:
+    {'offset_ns', 'delay_ns', 'coinc', 'herald_singles', 'ch_singles',
+     'int_time', 'rate_hz'}.
     """
     import libraries.settings as st
-    offsets = np.arange(lo, hi + step / 2, step)
-    delays = [0.0] * len(st.delays_for())
+    delays = st.delays_for()
     delays[herald_ch - 1] = herald_delay
-    points = []
+    bg_delay = peak_delay + offset
+    delays[ch - 1] = bg_delay
     with Logic16(coincidence_window=COINCIDENCE_WINDOW, logic_mode=True,
                  integration_window=integration) as logic:
         logic.configure(threshold=THRESHOLDS, coincidence_window=COINCIDENCE_WINDOW)
-        for off in offsets:
-            delays[ch - 1] = float(off)
-            logic.set_delays(delays)
-            c, s, t = logic.read_counts_integrated(
-                pos_singles=[herald_ch, ch], pos_coincidence=[[herald_ch, ch]])
-            rate = c[0] / t if t > 0 else 0.0
-            print(f"  bg {off:+6.1f} ns: {c[0]:5.0f} coinc ({rate:6.1f} Hz)")
-            points.append({'offset_ns': float(off), 'coinc': int(c[0]),
-                            'herald_singles': int(s[0]), 'ch_singles': int(s[1]),
-                            'int_time': t, 'rate_hz': rate})
+        logic.set_delays(delays)
+        c, s, t = logic.read_counts_integrated(
+            pos_singles=[herald_ch, ch], pos_coincidence=[[herald_ch, ch]])
 
-    mean_rate = float(np.mean([p['rate_hz'] for p in points]))
-    print(f"  mean background: {mean_rate:.1f} Hz")
-    return mean_rate, points
+    rate = c[0] / t if t > 0 else 0.0
+    print(f"  background @ {bg_delay:+.1f} ns (peak {peak_delay:+.1f} + {offset:.0f}): "
+          f"{c[0]:.0f} coinc ({rate:.1f} Hz)")
+    point = {'offset_ns': offset, 'delay_ns': bg_delay, 'coinc': int(c[0]),
+             'herald_singles': int(s[0]), 'ch_singles': int(s[1]),
+             'int_time': t, 'rate_hz': rate}
+    return rate, point
 
 
 # rework to be a delay optimizer if given an initial delay should just move up and down by +/- 30ns and check, also check coincidence windows between 5-1ns and chose smallest window with max counts
