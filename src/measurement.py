@@ -275,6 +275,14 @@ def _scan_and_record(ch, **kwargs):
     return scan_and_record(ch, **kwargs)
 
 
+def _measure_background(ch, **kwargs):
+    """SIM-guarded wrapper around countingcard.measure_background."""
+    if SIM_MODE:
+        return 0.0, []
+    from libraries.countingcard import measure_background
+    return measure_background(ch, **kwargs)
+
+
 def calibrate_loss():
     """Guided 5-stage loss calibration:
       0. source baseline, signal straight to the output detector      -> C0
@@ -286,7 +294,10 @@ def calibrate_loss():
     Stages 0 and 1 are both raw, setup-free baselines (herald+signal direct
     to a detector) — one through the output detector, one through the dump
     detector — since the two are physically different detectors and may not
-    share a detection efficiency.
+    share a detection efficiency. Each is followed by a background check:
+    herald pinned to 0 and that channel swept -10..+10 ns around 0 (both far
+    from any real tuned delay), averaged, to see how much of C0/C0_dump is
+    accidental floor rather than real coincidences.
 
     loss_zero_loops = C_ch2/C0, loss_per_loop_pass = C_ch4/C_ch2,
     loss_to_dump = C_dump/C_ch4 (extra factor on top of one loop pass, using
@@ -304,11 +315,15 @@ def calibrate_loss():
     ch0 = int(ch0) if ch0 else 2
     delay0, row0 = _scan_and_record(ch0, absolute_range=(0.0, 20.0), step=1.0,
                                      record_duration=duration)
+    print("Checking background (herald=0, ch scan -10..+10 ns)...")
+    bg0, _ = _measure_background(ch0)
 
     input("\nStage 1/4: plug signal directly into the DUMP detector "
           "(herald stays connected), press Enter when ready...")
     delay0d, row0d = _scan_and_record(st.DUMP_CH, absolute_range=(0.0, 20.0), step=1.0,
                                        record_duration=duration)
+    print("Checking background (herald=0, ch scan -10..+10 ns)...")
+    bg0d, _ = _measure_background(st.DUMP_CH)
 
     input("\nStage 2/4: plug signal into the setup, press Enter when ready...")
     _set_input_basis('H')                                   # HWP_IN/QWP_IN -> H
@@ -346,8 +361,8 @@ def calibrate_loss():
 
     meta = {
         'stages': {
-            'source':      {'ch': ch0, 'delay_ns': delay0, 'counts': row0},
-            'source_dump': {'ch': st.DUMP_CH, 'delay_ns': delay0d, 'counts': row0d},
+            'source':      {'ch': ch0, 'delay_ns': delay0, 'counts': row0, 'background_hz': bg0},
+            'source_dump': {'ch': st.DUMP_CH, 'delay_ns': delay0d, 'counts': row0d, 'background_hz': bg0d},
             'ch2':         {'ch': 2, 'delay_ns': delay2, 'counts': row2},
             'ch4':         {'ch': 4, 'delay_ns': delay4, 'counts': row4},
             'dump':        {'ch': st.DUMP_CH, 'delay_ns': delay7, 'counts': row7},

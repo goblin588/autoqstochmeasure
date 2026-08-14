@@ -364,6 +364,47 @@ def scan_and_record(
     return best_delay, row
 
 
+def measure_background(
+    ch: int,
+    herald_ch: int = TRIGG_CH,
+    span: float = 10.0,
+    step: float = 2.0,
+    integration: float = 2.0,
+):
+    """Accidental-coincidence floor for a raw (no-setup) baseline channel:
+    herald pinned to delay 0 and `ch` swept -span..+span ns around 0 — both
+    far from any real tuned delay (hundreds to thousands of ns), so every
+    scan point misses the true photon-arrival alignment and only counts
+    accidentals. Returns the mean rate across the scan (robust to a single
+    point landing on a stray peak, e.g. electronic crosstalk near zero).
+
+    Unlike tune_delays' background check (which offsets a small amount from
+    an already-tuned real delay), this is for stages that have no tuned
+    delay to offset from — a fresh source/dump baseline reading.
+
+    Returns (mean_rate_hz, [(offset_ns, rate_hz), ...]).
+    """
+    import libraries.settings as st
+    offsets = np.arange(-span, span + step / 2, step)
+    delays = [0.0] * len(st.delays_for())  # herald AND ch both start at 0
+    points = []
+    with Logic16(coincidence_window=COINCIDENCE_WINDOW, logic_mode=True,
+                 integration_window=integration) as logic:
+        logic.configure(threshold=THRESHOLDS, coincidence_window=COINCIDENCE_WINDOW)
+        for off in offsets:
+            delays[ch - 1] = float(off)
+            logic.set_delays(delays)
+            c, s, t = logic.read_counts_integrated(
+                pos_singles=[herald_ch, ch], pos_coincidence=[[herald_ch, ch]])
+            rate = c[0] / t if t > 0 else 0.0
+            print(f"  bg {off:+6.1f} ns: {c[0]:5.0f} coinc ({rate:6.1f} Hz)")
+            points.append((float(off), rate))
+
+    mean_rate = float(np.mean([r for _, r in points]))
+    print(f"  mean background: {mean_rate:.1f} Hz")
+    return mean_rate, points
+
+
 # rework to be a delay optimizer if given an initial delay should just move up and down by +/- 30ns and check, also check coincidence windows between 5-1ns and chose smallest window with max counts
 def find_delay_window(
     herald_ch: int = TRIGG_CH,
