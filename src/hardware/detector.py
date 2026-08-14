@@ -190,10 +190,12 @@ class Logic16:
     def read_counts_integrated(self, pos_coincidence, pos_singles, neg_singles=[0]):
         """
         Reads integrated counts over a specified integration window.
-        Every count is kept, including latched windows (removed offline in
-        post-selection); a detected latch only triggers an antilatch ping so the
-        detector recovers. The buffer is NOT cleared here, so counts accumulated
-        since the previous read (e.g. the gap between rows) are also included.
+        A latched read (some channel's singles == 0 for the bin) is thrown
+        away and redone, not accumulated — it pings the antilatch server and
+        loops again without advancing counting_time, so the returned totals
+        and int_time reflect only genuinely counted time. The buffer is NOT
+        cleared here, so counts accumulated since the previous read (e.g.
+        the gap between rows) are also included.
         """
         counting_time = 0
         total_c_counts = np.zeros(len(pos_coincidence))
@@ -210,9 +212,6 @@ class Logic16:
             c_counts, s_counts, _timecounter = self.read_counts(pos_coincidence=pos_coincidence,
                                                                 pos_singles=pos_singles,
                                                                 neg_singles=neg_singles)
-            total_c_counts += c_counts
-            total_s_counts += s_counts
-            counting_time += time.monotonic() - t0
 
             antilatch_flags = self.antilatch_check(s_counts)
             if antilatch_flags > 0:
@@ -227,6 +226,10 @@ class Logic16:
                 if has_latched > 5:
                     print('\nWARNING: several latching events in a row - is the cryostat warm?')
                     has_latched = 0
-            else:
-                has_latched = 0
+                continue  # discard this bin (0 counts = latched) and redo it
+
+            total_c_counts += c_counts
+            total_s_counts += s_counts
+            counting_time += time.monotonic() - t0
+            has_latched = 0
         return total_c_counts, total_s_counts, counting_time

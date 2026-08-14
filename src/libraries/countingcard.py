@@ -14,9 +14,10 @@ def acquire_counts(
     Integrates counts for `duration` seconds and returns totals as a dict:
     {'herald': ..., 'singles_ch{n}': ..., 'coinc_ch{n}': ..., 'int_time': ...}
 
-    Antilatch-safe via read_counts_integrated. int_time is the actual
-    counting time, which can be less than duration if latch events ate
-    timeslices — divide counts by it for rates.
+    Antilatch-safe via read_counts_integrated: a latched bin is discarded
+    and redone rather than counted, so int_time is real counted time (may
+    run slightly over duration, but never includes latched dead time) —
+    divide counts by it for rates.
     """
     with Logic16(coincidence_window=coincidence_window, logic_mode=True,
                  integration_window=duration) as logic:
