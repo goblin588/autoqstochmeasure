@@ -295,9 +295,10 @@ def calibrate_loss():
     to a detector) — one through the output detector, one through the dump
     detector — since the two are physically different detectors and may not
     share a detection efficiency. Each is followed by a background check:
-    herald pinned to 0 and that channel swept -10..+10 ns around 0 (both far
-    from any real tuned delay), averaged, to see how much of C0/C0_dump is
-    accidental floor rather than real coincidences.
+    herald pinned to 10ns and that channel swept 0..20 ns (hardware can't
+    take a negative delay — this keeps the same +/-10ns relative offset,
+    just shifted so neither value goes negative), averaged, to see how much
+    of C0/C0_dump is accidental floor rather than real coincidences.
 
     loss_zero_loops = C_ch2/C0, loss_per_loop_pass = C_ch4/C_ch2,
     loss_to_dump = C_dump/C_ch4 (extra factor on top of one loop pass, using
@@ -315,14 +316,14 @@ def calibrate_loss():
     ch0 = int(ch0) if ch0 else 2
     delay0, row0 = _scan_and_record(ch0, absolute_range=(0.0, 20.0), step=1.0,
                                      record_duration=duration)
-    print("Checking background (herald=0, ch scan -10..+10 ns)...")
+    print("Checking background (herald=10ns, ch scan 0..20 ns)...")
     bg0, bg0_points = _measure_background(ch0)
 
     input("\nStage 1/4: plug signal directly into the DUMP detector "
           "(herald stays connected), press Enter when ready...")
     delay0d, row0d = _scan_and_record(st.DUMP_CH, absolute_range=(0.0, 20.0), step=1.0,
                                        record_duration=duration)
-    print("Checking background (herald=0, ch scan -10..+10 ns)...")
+    print("Checking background (herald=10ns, ch scan 0..20 ns)...")
     bg0d, bg0d_points = _measure_background(st.DUMP_CH)
 
     input("\nStage 2/4: plug signal into the setup, press Enter when ready...")
