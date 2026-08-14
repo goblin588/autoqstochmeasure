@@ -316,14 +316,14 @@ def calibrate_loss():
     delay0, row0 = _scan_and_record(ch0, absolute_range=(0.0, 20.0), step=1.0,
                                      record_duration=duration)
     print("Checking background (herald=0, ch scan -10..+10 ns)...")
-    bg0, _ = _measure_background(ch0)
+    bg0, bg0_points = _measure_background(ch0)
 
     input("\nStage 1/4: plug signal directly into the DUMP detector "
           "(herald stays connected), press Enter when ready...")
     delay0d, row0d = _scan_and_record(st.DUMP_CH, absolute_range=(0.0, 20.0), step=1.0,
                                        record_duration=duration)
     print("Checking background (herald=0, ch scan -10..+10 ns)...")
-    bg0d, _ = _measure_background(st.DUMP_CH)
+    bg0d, bg0d_points = _measure_background(st.DUMP_CH)
 
     input("\nStage 2/4: plug signal into the setup, press Enter when ready...")
     _set_input_basis('H')                                   # HWP_IN/QWP_IN -> H
@@ -361,8 +361,10 @@ def calibrate_loss():
 
     meta = {
         'stages': {
-            'source':      {'ch': ch0, 'delay_ns': delay0, 'counts': row0, 'background_hz': bg0},
-            'source_dump': {'ch': st.DUMP_CH, 'delay_ns': delay0d, 'counts': row0d, 'background_hz': bg0d},
+            'source':      {'ch': ch0, 'delay_ns': delay0, 'counts': row0,
+                             'background_hz': bg0, 'background_points': bg0_points},
+            'source_dump': {'ch': st.DUMP_CH, 'delay_ns': delay0d, 'counts': row0d,
+                             'background_hz': bg0d, 'background_points': bg0d_points},
             'ch2':         {'ch': 2, 'delay_ns': delay2, 'counts': row2},
             'ch4':         {'ch': 4, 'delay_ns': delay4, 'counts': row4},
             'dump':        {'ch': st.DUMP_CH, 'delay_ns': delay7, 'counts': row7},

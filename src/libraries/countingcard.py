@@ -382,7 +382,10 @@ def measure_background(
     an already-tuned real delay), this is for stages that have no tuned
     delay to offset from — a fresh source/dump baseline reading.
 
-    Returns (mean_rate_hz, [(offset_ns, rate_hz), ...]).
+    Returns (mean_rate_hz, points) — points is every raw scan point, not
+    just the mean, so the run can be reprocessed independently later:
+    [{'offset_ns', 'coinc', 'herald_singles', 'ch_singles', 'int_time',
+      'rate_hz'}, ...].
     """
     import libraries.settings as st
     offsets = np.arange(-span, span + step / 2, step)
@@ -398,9 +401,11 @@ def measure_background(
                 pos_singles=[herald_ch, ch], pos_coincidence=[[herald_ch, ch]])
             rate = c[0] / t if t > 0 else 0.0
             print(f"  bg {off:+6.1f} ns: {c[0]:5.0f} coinc ({rate:6.1f} Hz)")
-            points.append((float(off), rate))
+            points.append({'offset_ns': float(off), 'coinc': int(c[0]),
+                            'herald_singles': int(s[0]), 'ch_singles': int(s[1]),
+                            'int_time': t, 'rate_hz': rate})
 
-    mean_rate = float(np.mean([r for _, r in points]))
+    mean_rate = float(np.mean([p['rate_hz'] for p in points]))
     print(f"  mean background: {mean_rate:.1f} Hz")
     return mean_rate, points
 
