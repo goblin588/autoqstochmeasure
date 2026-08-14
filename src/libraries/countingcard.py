@@ -316,6 +316,7 @@ def scan_and_record(
     scan_integration: float = 2.0,
     record_duration: float = 60.0,
     herald_ch: int = TRIGG_CH,
+    herald_delay: float | None = None,
 ):
     """Single-pass delay scan for `ch` (no zoom levels, unlike tune_delays),
     then a full-length recording at the best delay found.
@@ -323,6 +324,14 @@ def scan_and_record(
     Offsets come from `absolute_range=(lo, hi)` if given (cold scan over an
     absolute range), else from `center` +/- `span` in `step` steps (mini
     sweep around an already-known-good delay).
+
+    herald_delay overrides the herald channel's delay for this scan.
+    None (default) keeps herald at its normal calibrated value from
+    delays_for() — correct when `ch` shares the experiment's usual fiber
+    path. Pass an explicit value for an ad hoc connection (e.g. a bare
+    herald+signal-straight-to-detector baseline) where the calibrated
+    herald delay was tuned for a completely different cable path and won't
+    land the coincidence window anywhere near the real peak.
 
     Opens one Logic16 context for both the scan and the final recording —
     mirrors tune_delays, never reopens the card per point.
@@ -336,6 +345,8 @@ def scan_and_record(
                else center + np.arange(-span, span + step / 2, step))
 
     delays = st.delays_for()
+    if herald_delay is not None:
+        delays[herald_ch - 1] = herald_delay
     best_delay, best_counts = delays[ch - 1], -1.0
     with Logic16(coincidence_window=COINCIDENCE_WINDOW, logic_mode=True,
                  integration_window=scan_integration) as logic:

@@ -308,6 +308,11 @@ def calibrate_loss():
 
     Saves data/{timestamp}_loss_calibration.json.
     """
+    # Stages 0/1 are a bare source->detector connection, not the setup's
+    # usual fiber path — the calibrated herald delay (~3841ns, tuned for
+    # that usual path) doesn't apply here, so both the peak search and the
+    # background check pin herald to this instead.
+    raw_herald_delay = 10.0
     duration = _ask_calibration_duration()
 
     input("\nStage 0/4: plug both herald and signal directly into detectors "
@@ -315,16 +320,16 @@ def calibrate_loss():
     ch0 = input("Detector channel the bare signal fiber landed on (default 2): ").strip()
     ch0 = int(ch0) if ch0 else 2
     delay0, row0 = _scan_and_record(ch0, absolute_range=(0.0, 20.0), step=1.0,
-                                     record_duration=duration)
+                                     record_duration=duration, herald_delay=raw_herald_delay)
     print("Checking background (herald=10ns, ch scan 0..20 ns)...")
-    bg0, bg0_points = _measure_background(ch0)
+    bg0, bg0_points = _measure_background(ch0, herald_delay=raw_herald_delay)
 
     input("\nStage 1/4: plug signal directly into the DUMP detector "
           "(herald stays connected), press Enter when ready...")
     delay0d, row0d = _scan_and_record(st.DUMP_CH, absolute_range=(0.0, 20.0), step=1.0,
-                                       record_duration=duration)
+                                       record_duration=duration, herald_delay=raw_herald_delay)
     print("Checking background (herald=10ns, ch scan 0..20 ns)...")
-    bg0d, bg0d_points = _measure_background(st.DUMP_CH)
+    bg0d, bg0d_points = _measure_background(st.DUMP_CH, herald_delay=raw_herald_delay)
 
     input("\nStage 2/4: plug signal into the setup, press Enter when ready...")
     _set_input_basis('H')                                   # HWP_IN/QWP_IN -> H
