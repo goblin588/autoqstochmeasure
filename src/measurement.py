@@ -204,11 +204,11 @@ def _calibration_date(path):
     return json.loads(path.read_text())['saved_at']
 
 
-def _ask_calibration_duration():
+def _ask_calibration_duration(default=60.0):
     while True:
-        s = input("Integration time per calibration step, in seconds (default 60): ").strip()
+        s = input(f"Integration time per calibration step, in seconds (default {default:.0f}): ").strip()
         if not s:
-            return 60.0
+            return default
         try:
             return float(s)
         except ValueError:
@@ -283,6 +283,62 @@ def _measure_background(ch, **kwargs):
     return measure_background(ch, **kwargs)
 
 
+def _find_latest_loss_calibration():
+    """Most recent data/*_loss_calibration.json, parsed — or (None, {}) if
+    none exist yet. Same glob/mtime pattern as _latest_calibration()."""
+    files = sorted(Path(st.DATA_DIR).glob('*_loss_calibration.json'), key=lambda p: p.stat().st_mtime)
+    if not files:
+        return None, {}
+    path = files[-1]
+    return path, json.loads(path.read_text())
+
+
+def _loss_stage(existing_stages, key, run):
+    """Check for an existing measurement of `key` (from a prior, possibly
+    interrupted, loss calibration); ask whether to reuse it or redo the
+    stage. `run()` performs the stage's prompts/waveplate moves/scan and
+    returns its result dict when redoing. Either way, returns the stage
+    dict with 'saved_at' set."""
+    prior = existing_stages.get(key)
+    if prior is not None:
+        when = prior.get('saved_at', 'unknown date')
+        choice = input(f"\nExisting '{key}' measurement from {when} found — "
+                        f"use it, or redo this stage? [Use/redo]: ").strip().lower()
+        if not choice.startswith('r'):
+            print(f"Using existing '{key}' data — skipping this stage.")
+            return prior
+    result = run()
+    result['saved_at'] = datetime.datetime.now().isoformat()
+    return result
+
+
+def _set_bypass_optics():
+    """Zero-loop bypass: input H, loop-input plates at 0 (nothing rotated
+    into the loop), exit plate at 45° sends it straight back out. Sets
+    every plate this stage depends on — self-contained so it's safe to run
+    even if an earlier stage was skipped via resume."""
+    _set_input_basis('H')
+    tl.move_stage(HWP_IN_2, 0, COMPORT)
+    tl.move_stage(QWP_IN_2, 0, COMPORT)
+    tl.move_stage(QWP_OUT_2, 0, COMPORT)
+    print("Setting HWP_OUT_2 to 45°")
+    tl.move_stage(HWP_OUT_2, 45, COMPORT)
+
+
+def _set_loop_optics():
+    """One loop pass: input H, loop-input plates rotate H->V so the photon
+    actually circulates ("H to V, just HWP at 45"), exit plate at 45° sends
+    it (or the switch) back out. Self-contained, same reasoning as
+    _set_bypass_optics."""
+    _set_input_basis('H')
+    tl.move_stage(QWP_OUT_2, 0, COMPORT)
+    print("Setting HWP_OUT_2 to 45°")
+    tl.move_stage(HWP_OUT_2, 45, COMPORT)
+    hwp_v, qwp_v = basis_angles['V']
+    tl.move_stage(HWP_IN_2, hwp_v, COMPORT)
+    tl.move_stage(QWP_IN_2, qwp_v, COMPORT)
+
+
 def calibrate_loss():
     """Guided 5-stage loss calibration:
       0. source baseline, signal straight to the output detector      -> C0
@@ -306,57 +362,108 @@ def calibrate_loss():
     (same numerator, but referenced to the dump detector's own raw baseline
     instead — use whichever is the meaningful comparison for your model).
 
-    Saves data/{timestamp}_loss_calibration.json.
+    Resumable: saves after every stage (not just at the end), to
+    data/{timestamp}_loss_calibration.json. If a previous (possibly
+    interrupted) run's file exists, its stages are offered for reuse one at
+    a time instead of redoing them — so a bad dump reading, say, doesn't
+    mean redoing the source/ch2/ch4 stages too. Reusing continues writing
+    into that same file; starting fresh (no prior file, or redoing every
+    stage) creates a new one.
     """
     # Stages 0/1 are a bare source->detector connection, not the setup's
     # usual fiber path — the calibrated herald delay (~3841ns, tuned for
     # that usual path) doesn't apply here, so both the peak search and the
     # background check pin herald to this instead.
     raw_herald_delay = 10.0
-    duration = _ask_calibration_duration()
+    duration = _ask_calibration_duration(default=30.0)
 
-    input("\nStage 0/4: plug both herald and signal directly into detectors "
-          "(output detector), press Enter when ready...")
-    ch0 = input("Detector channel the bare signal fiber landed on (default 2): ").strip()
-    ch0 = int(ch0) if ch0 else 2
-    delay0, row0 = _scan_and_record(ch0, absolute_range=(0.0, 20.0), step=1.0,
-                                     record_duration=duration, herald_delay=raw_herald_delay)
-    print(f"Checking background (herald={raw_herald_delay:.0f}ns, ch @ peak+15ns)...")
-    bg0, bg0_point = _measure_background(ch0, peak_delay=delay0, herald_delay=raw_herald_delay)
+    path, existing = _find_latest_loss_calibration()
+    existing_stages = existing.get('stages', {})
+    if existing_stages:
+        print(f"Found an existing loss calibration ({path.name}) with stages: "
+              f"{', '.join(existing_stages)} — you'll be asked per stage whether to reuse them.")
 
-    input("\nStage 1/4: plug signal directly into the DUMP detector "
-          "(herald stays connected), press Enter when ready...")
-    delay0d, row0d = _scan_and_record(st.DUMP_CH, absolute_range=(0.0, 20.0), step=1.0,
-                                       record_duration=duration, herald_delay=raw_herald_delay)
-    print(f"Checking background (herald={raw_herald_delay:.0f}ns, ch @ peak+15ns)...")
-    bg0d, bg0d_point = _measure_background(st.DUMP_CH, peak_delay=delay0d, herald_delay=raw_herald_delay)
+    stages = {}
 
-    input("\nStage 2/4: plug signal into the setup, press Enter when ready...")
-    _set_input_basis('H')                                   # HWP_IN/QWP_IN -> H
-    tl.move_stage(HWP_IN_2, 0, COMPORT)
-    tl.move_stage(QWP_IN_2, 0, COMPORT)
-    tl.move_stage(QWP_OUT_2, 0, COMPORT)
-    print("Setting HWP_OUT_2 to 45°")
-    tl.move_stage(HWP_OUT_2, 45, COMPORT)
-    delay2, row2 = _scan_and_record(2, center=st.CHANNELS[2]['delay'], span=3.0,
-                                     record_duration=duration)
+    def _save(losses=None):
+        nonlocal path
+        if path is None:
+            os.makedirs(st.DATA_DIR, exist_ok=True)
+            path = Path(f"{st.DATA_DIR}/{datetime.datetime.now():%Y%m%d_%H%M%S}_loss_calibration.json")
+        meta = {
+            'stages': stages,
+            'duration_s': duration,
+            'git_commit': _git_commit(),
+            'saved_at': datetime.datetime.now().isoformat(),
+        }
+        if losses is not None:
+            meta['losses'] = losses
+        path.write_text(json.dumps(meta, indent=1))
+        print(f"  (saved -> {path.name})")
+        return meta
 
-    print("\nStage 3/4: one-loop pass — no fiber changes needed.")
-    hwp_v, qwp_v = basis_angles['V']                        # "H to V, just HWP at 45"
-    tl.move_stage(HWP_IN_2, hwp_v, COMPORT)
-    tl.move_stage(QWP_IN_2, qwp_v, COMPORT)
-    delay4, row4 = _scan_and_record(4, center=st.CHANNELS[4]['delay'], span=3.0,
-                                     record_duration=duration)
+    def _run_source():
+        input("\nStage 0/4: plug both herald and signal directly into detectors "
+              "(output detector), press Enter when ready...")
+        ch0 = input("Detector channel the bare signal fiber landed on (default 2): ").strip()
+        ch0 = int(ch0) if ch0 else 2
+        delay0, row0 = _scan_and_record(ch0, absolute_range=(0.0, 20.0), step=1.0,
+                                         record_duration=duration, herald_delay=raw_herald_delay)
+        print(f"Checking background (herald={raw_herald_delay:.0f}ns, ch @ peak+15ns)...")
+        bg0, bg0_point = _measure_background(ch0, peak_delay=delay0, herald_delay=raw_herald_delay)
+        return {'ch': ch0, 'delay_ns': delay0, 'counts': row0,
+                'background_hz': bg0, 'background_point': bg0_point}
 
-    input("\nStage 4/4: set the switch to dump after 1 loop (dwell 60 ns) on the "
-          "switch control program, press Enter when ready...")
-    delay7, row7 = _scan_and_record(st.DUMP_CH, center=st.DUMP_DELAYS[1], span=3.0,
-                                     record_duration=duration)
+    stages['source'] = _loss_stage(existing_stages, 'source', _run_source)
+    _save()
 
-    def rate(row, ch):
-        return row[f'coinc_ch{ch}'] / row['int_time'] if row['int_time'] else 0.0
-    C0, C0d, C2, C4, Cd = (rate(row0, ch0), rate(row0d, st.DUMP_CH), rate(row2, 2),
-                            rate(row4, 4), rate(row7, st.DUMP_CH))
+    def _run_source_dump():
+        input("\nStage 1/4: plug signal directly into the DUMP detector "
+              "(herald stays connected), press Enter when ready...")
+        delay0d, row0d = _scan_and_record(st.DUMP_CH, absolute_range=(0.0, 20.0), step=1.0,
+                                           record_duration=duration, herald_delay=raw_herald_delay)
+        print(f"Checking background (herald={raw_herald_delay:.0f}ns, ch @ peak+15ns)...")
+        bg0d, bg0d_point = _measure_background(st.DUMP_CH, peak_delay=delay0d, herald_delay=raw_herald_delay)
+        return {'ch': st.DUMP_CH, 'delay_ns': delay0d, 'counts': row0d,
+                'background_hz': bg0d, 'background_point': bg0d_point}
+
+    stages['source_dump'] = _loss_stage(existing_stages, 'source_dump', _run_source_dump)
+    _save()
+
+    def _run_ch2():
+        input("\nStage 2/4: plug signal into the setup, press Enter when ready...")
+        _set_bypass_optics()
+        delay2, row2 = _scan_and_record(2, center=st.CHANNELS[2]['delay'], span=3.0,
+                                         record_duration=duration)
+        return {'ch': 2, 'delay_ns': delay2, 'counts': row2}
+
+    stages['ch2'] = _loss_stage(existing_stages, 'ch2', _run_ch2)
+    _save()
+
+    def _run_ch4():
+        print("\nStage 3/4: one-loop pass — no fiber changes needed.")
+        _set_loop_optics()
+        delay4, row4 = _scan_and_record(4, center=st.CHANNELS[4]['delay'], span=3.0,
+                                         record_duration=duration)
+        return {'ch': 4, 'delay_ns': delay4, 'counts': row4}
+
+    stages['ch4'] = _loss_stage(existing_stages, 'ch4', _run_ch4)
+    _save()
+
+    def _run_dump():
+        _set_loop_optics()
+        input("\nStage 4/4: set the switch to dump after 1 loop (dwell 60 ns) on the "
+              "switch control program, press Enter when ready...")
+        delay7, row7 = _scan_and_record(st.DUMP_CH, center=st.DUMP_DELAYS[1], span=3.0,
+                                         record_duration=duration)
+        return {'ch': st.DUMP_CH, 'delay_ns': delay7, 'counts': row7}
+
+    stages['dump'] = _loss_stage(existing_stages, 'dump', _run_dump)
+
+    def rate(stage_key):
+        s = stages[stage_key]
+        return s['counts'][f"coinc_ch{s['ch']}"] / s['counts']['int_time'] if s['counts']['int_time'] else 0.0
+    C0, C0d, C2, C4, Cd = rate('source'), rate('source_dump'), rate('ch2'), rate('ch4'), rate('dump')
 
     losses = {
         'loss_zero_loops':    C2 / C0 if C0 else None,
@@ -364,28 +471,8 @@ def calibrate_loss():
         'loss_to_dump':       Cd / C4 if C4 else None,
         'loss_to_dump_raw':   Cd / C0d if C0d else None,
     }
-
-    meta = {
-        'stages': {
-            'source':      {'ch': ch0, 'delay_ns': delay0, 'counts': row0,
-                             'background_hz': bg0, 'background_point': bg0_point},
-            'source_dump': {'ch': st.DUMP_CH, 'delay_ns': delay0d, 'counts': row0d,
-                             'background_hz': bg0d, 'background_point': bg0d_point},
-            'ch2':         {'ch': 2, 'delay_ns': delay2, 'counts': row2},
-            'ch4':         {'ch': 4, 'delay_ns': delay4, 'counts': row4},
-            'dump':        {'ch': st.DUMP_CH, 'delay_ns': delay7, 'counts': row7},
-        },
-        'rates_hz': {'source': C0, 'source_dump': C0d, 'ch2': C2, 'ch4': C4, 'dump': Cd},
-        'losses': losses,
-        'duration_s': duration,
-        'git_commit': _git_commit(),
-        'saved_at': datetime.datetime.now().isoformat(),
-    }
-    os.makedirs(st.DATA_DIR, exist_ok=True)
-    stem = f"{st.DATA_DIR}/{datetime.datetime.now():%Y%m%d_%H%M%S}_loss_calibration"
-    with open(f"{stem}.json", 'w') as f:
-        json.dump(meta, f, indent=1)
-    print(f"\nSaved -> {stem}.json")
+    meta = _save(losses=losses)
+    print(f"\nSaved -> {path}")
     print(f"losses: {losses}")
     notify("Loss calibration done", title="Calibration Complete")
     return meta
