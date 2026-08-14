@@ -278,7 +278,7 @@ def _scan_and_record(ch, **kwargs):
 def _measure_background(ch, **kwargs):
     """SIM-guarded wrapper around countingcard.measure_background."""
     if SIM_MODE:
-        return 0.0, []
+        return 0.0, {}
     from libraries.countingcard import measure_background
     return measure_background(ch, **kwargs)
 
@@ -294,11 +294,11 @@ def calibrate_loss():
     Stages 0 and 1 are both raw, setup-free baselines (herald+signal direct
     to a detector) — one through the output detector, one through the dump
     detector — since the two are physically different detectors and may not
-    share a detection efficiency. Each is followed by a background check:
-    herald pinned to 10ns and that channel swept 0..20 ns (hardware can't
-    take a negative delay — this keeps the same +/-10ns relative offset,
-    just shifted so neither value goes negative), averaged, to see how much
-    of C0/C0_dump is accidental floor rather than real coincidences.
+    share a detection efficiency. Each is followed by a background check: a
+    single read at that stage's found peak delay +15ns (same
+    BACKGROUND_OFFSET_NS convention as calibrate_background/tune_delays),
+    far enough off the real peak to see how much of C0/C0_dump is accidental
+    floor rather than real coincidences.
 
     loss_zero_loops = C_ch2/C0, loss_per_loop_pass = C_ch4/C_ch2,
     loss_to_dump = C_dump/C_ch4 (extra factor on top of one loop pass, using
@@ -321,15 +321,15 @@ def calibrate_loss():
     ch0 = int(ch0) if ch0 else 2
     delay0, row0 = _scan_and_record(ch0, absolute_range=(0.0, 20.0), step=1.0,
                                      record_duration=duration, herald_delay=raw_herald_delay)
-    print("Checking background (herald=10ns, ch scan 0..20 ns)...")
-    bg0, bg0_points = _measure_background(ch0, herald_delay=raw_herald_delay)
+    print(f"Checking background (herald={raw_herald_delay:.0f}ns, ch @ peak+15ns)...")
+    bg0, bg0_point = _measure_background(ch0, peak_delay=delay0, herald_delay=raw_herald_delay)
 
     input("\nStage 1/4: plug signal directly into the DUMP detector "
           "(herald stays connected), press Enter when ready...")
     delay0d, row0d = _scan_and_record(st.DUMP_CH, absolute_range=(0.0, 20.0), step=1.0,
                                        record_duration=duration, herald_delay=raw_herald_delay)
-    print("Checking background (herald=10ns, ch scan 0..20 ns)...")
-    bg0d, bg0d_points = _measure_background(st.DUMP_CH, herald_delay=raw_herald_delay)
+    print(f"Checking background (herald={raw_herald_delay:.0f}ns, ch @ peak+15ns)...")
+    bg0d, bg0d_point = _measure_background(st.DUMP_CH, peak_delay=delay0d, herald_delay=raw_herald_delay)
 
     input("\nStage 2/4: plug signal into the setup, press Enter when ready...")
     _set_input_basis('H')                                   # HWP_IN/QWP_IN -> H
@@ -368,9 +368,9 @@ def calibrate_loss():
     meta = {
         'stages': {
             'source':      {'ch': ch0, 'delay_ns': delay0, 'counts': row0,
-                             'background_hz': bg0, 'background_points': bg0_points},
+                             'background_hz': bg0, 'background_point': bg0_point},
             'source_dump': {'ch': st.DUMP_CH, 'delay_ns': delay0d, 'counts': row0d,
-                             'background_hz': bg0d, 'background_points': bg0d_points},
+                             'background_hz': bg0d, 'background_point': bg0d_point},
             'ch2':         {'ch': 2, 'delay_ns': delay2, 'counts': row2},
             'ch4':         {'ch': 4, 'delay_ns': delay4, 'counts': row4},
             'dump':        {'ch': st.DUMP_CH, 'delay_ns': delay7, 'counts': row7},
