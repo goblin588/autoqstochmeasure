@@ -367,16 +367,21 @@ def scan_and_record(
 def measure_background(
     ch: int,
     herald_ch: int = TRIGG_CH,
-    span: float = 10.0,
+    herald_delay: float = 10.0,
+    lo: float = 0.0,
+    hi: float = 20.0,
     step: float = 2.0,
     integration: float = 2.0,
 ):
     """Accidental-coincidence floor for a raw (no-setup) baseline channel:
-    herald pinned to delay 0 and `ch` swept -span..+span ns around 0 — both
-    far from any real tuned delay (hundreds to thousands of ns), so every
-    scan point misses the true photon-arrival alignment and only counts
-    accidentals. Returns the mean rate across the scan (robust to a single
-    point landing on a stray peak, e.g. electronic crosstalk near zero).
+    herald pinned to `herald_delay` (10ns) and `ch` swept lo..hi ns (0..20ns)
+    — both far from any real tuned delay (hundreds to thousands of ns), so
+    every scan point misses the true photon-arrival alignment and only
+    counts accidentals. The herald-ch relative offset still spans the same
+    +/-10ns window either way — this hardware just can't take a negative
+    delay, so both are shifted up by 10ns instead of centering on 0.
+    Returns the mean rate across the scan (robust to a single point landing
+    on a stray peak, e.g. electronic crosstalk).
 
     Unlike tune_delays' background check (which offsets a small amount from
     an already-tuned real delay), this is for stages that have no tuned
@@ -388,8 +393,9 @@ def measure_background(
       'rate_hz'}, ...].
     """
     import libraries.settings as st
-    offsets = np.arange(-span, span + step / 2, step)
-    delays = [0.0] * len(st.delays_for())  # herald AND ch both start at 0
+    offsets = np.arange(lo, hi + step / 2, step)
+    delays = [0.0] * len(st.delays_for())
+    delays[herald_ch - 1] = herald_delay
     points = []
     with Logic16(coincidence_window=COINCIDENCE_WINDOW, logic_mode=True,
                  integration_window=integration) as logic:
