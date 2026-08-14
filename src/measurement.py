@@ -276,28 +276,41 @@ def _scan_and_record(ch, **kwargs):
 
 
 def calibrate_loss():
-    """Guided 4-stage loss calibration:
-      0. source baseline (herald+signal straight to detectors)      -> C0
-      1. zero-loop bypass, signal into setup, exits without looping -> C_ch2
-      2. one loop pass, exits via the normal loop-output port       -> C_ch4
-      3. one loop pass, switch diverts to the dump port/detector    -> C_dump
+    """Guided 5-stage loss calibration:
+      0. source baseline, signal straight to the output detector      -> C0
+      1. source baseline, signal straight to the DUMP detector        -> C0_dump
+      2. zero-loop bypass, signal into setup, exits without looping   -> C_ch2
+      3. one loop pass, exits via the normal loop-output port         -> C_ch4
+      4. one loop pass, switch diverts to the dump port/detector      -> C_dump
+
+    Stages 0 and 1 are both raw, setup-free baselines (herald+signal direct
+    to a detector) — one through the output detector, one through the dump
+    detector — since the two are physically different detectors and may not
+    share a detection efficiency.
 
     loss_zero_loops = C_ch2/C0, loss_per_loop_pass = C_ch4/C_ch2,
-    loss_to_dump = C_dump/C_ch4 (an extra factor on top of one loop pass —
-    the dump is a physically separate switch output/path/detector).
+    loss_to_dump = C_dump/C_ch4 (extra factor on top of one loop pass, using
+    the loop-output detector as reference), loss_to_dump_raw = C_dump/C0_dump
+    (same numerator, but referenced to the dump detector's own raw baseline
+    instead — use whichever is the meaningful comparison for your model).
 
     Saves data/{timestamp}_loss_calibration.json.
     """
     duration = _ask_calibration_duration()
 
-    input("\nStage 0/3: plug both herald and signal directly into detectors, "
-          "press Enter when ready...")
+    input("\nStage 0/4: plug both herald and signal directly into detectors "
+          "(output detector), press Enter when ready...")
     ch0 = input("Detector channel the bare signal fiber landed on (default 2): ").strip()
     ch0 = int(ch0) if ch0 else 2
     delay0, row0 = _scan_and_record(ch0, absolute_range=(0.0, 20.0), step=1.0,
                                      record_duration=duration)
 
-    input("\nStage 1/3: plug signal into the setup, press Enter when ready...")
+    input("\nStage 1/4: plug signal directly into the DUMP detector "
+          "(herald stays connected), press Enter when ready...")
+    delay0d, row0d = _scan_and_record(st.DUMP_CH, absolute_range=(0.0, 20.0), step=1.0,
+                                       record_duration=duration)
+
+    input("\nStage 2/4: plug signal into the setup, press Enter when ready...")
     _set_input_basis('H')                                   # HWP_IN/QWP_IN -> H
     tl.move_stage(HWP_IN_2, 0, COMPORT)
     tl.move_stage(QWP_IN_2, 0, COMPORT)
@@ -307,36 +320,39 @@ def calibrate_loss():
     delay2, row2 = _scan_and_record(2, center=st.CHANNELS[2]['delay'], span=3.0,
                                      record_duration=duration)
 
-    print("\nStage 2/3: one-loop pass — no fiber changes needed.")
+    print("\nStage 3/4: one-loop pass — no fiber changes needed.")
     hwp_v, qwp_v = basis_angles['V']                        # "H to V, just HWP at 45"
     tl.move_stage(HWP_IN_2, hwp_v, COMPORT)
     tl.move_stage(QWP_IN_2, qwp_v, COMPORT)
     delay4, row4 = _scan_and_record(4, center=st.CHANNELS[4]['delay'], span=3.0,
                                      record_duration=duration)
 
-    input("\nStage 3/3: set the switch to dump after 1 loop (dwell 60 ns) on the "
+    input("\nStage 4/4: set the switch to dump after 1 loop (dwell 60 ns) on the "
           "switch control program, press Enter when ready...")
     delay7, row7 = _scan_and_record(st.DUMP_CH, center=st.DUMP_DELAYS[1], span=3.0,
                                      record_duration=duration)
 
     def rate(row, ch):
         return row[f'coinc_ch{ch}'] / row['int_time'] if row['int_time'] else 0.0
-    C0, C2, C4, Cd = rate(row0, ch0), rate(row2, 2), rate(row4, 4), rate(row7, st.DUMP_CH)
+    C0, C0d, C2, C4, Cd = (rate(row0, ch0), rate(row0d, st.DUMP_CH), rate(row2, 2),
+                            rate(row4, 4), rate(row7, st.DUMP_CH))
 
     losses = {
         'loss_zero_loops':    C2 / C0 if C0 else None,
         'loss_per_loop_pass': C4 / C2 if C2 else None,
         'loss_to_dump':       Cd / C4 if C4 else None,
+        'loss_to_dump_raw':   Cd / C0d if C0d else None,
     }
 
     meta = {
         'stages': {
-            'source': {'ch': ch0, 'delay_ns': delay0, 'counts': row0},
-            'ch2':    {'ch': 2, 'delay_ns': delay2, 'counts': row2},
-            'ch4':    {'ch': 4, 'delay_ns': delay4, 'counts': row4},
-            'dump':   {'ch': st.DUMP_CH, 'delay_ns': delay7, 'counts': row7},
+            'source':      {'ch': ch0, 'delay_ns': delay0, 'counts': row0},
+            'source_dump': {'ch': st.DUMP_CH, 'delay_ns': delay0d, 'counts': row0d},
+            'ch2':         {'ch': 2, 'delay_ns': delay2, 'counts': row2},
+            'ch4':         {'ch': 4, 'delay_ns': delay4, 'counts': row4},
+            'dump':        {'ch': st.DUMP_CH, 'delay_ns': delay7, 'counts': row7},
         },
-        'rates_hz': {'source': C0, 'ch2': C2, 'ch4': C4, 'dump': Cd},
+        'rates_hz': {'source': C0, 'source_dump': C0d, 'ch2': C2, 'ch4': C4, 'dump': Cd},
         'losses': losses,
         'duration_s': duration,
         'git_commit': _git_commit(),
@@ -785,7 +801,7 @@ def main():
             "\t6. Perform tomography (photon counting) + plot\n"
             "\t7. Check single input/output projector (phase tuning)\n"
             "\t8. Calibrate background noise (block/herald/setup, 3 steps)\n"
-            "\t9. Calibrate loss (guided, 4 stages)\n"
+            "\t9. Calibrate loss (guided, 5 stages)\n"
             )
 
         match n:
