@@ -318,9 +318,11 @@ def _set_loop_optics():
     reaches the detector. Self-contained, same reasoning as
     _set_bypass_optics."""
     _set_input_basis('H')
+    print("Setting HWP_OUT_2/QWP_OUT_2 to 0°/0° (pass-through)")
     tl.move_stage(QWP_OUT_2, 0, COMPORT)
     tl.move_stage(HWP_OUT_2, 0, COMPORT)
     hwp_v, qwp_v = basis_angles['V']
+    print(f"Setting HWP_IN_2 to {hwp_v}°, QWP_IN_2 to {qwp_v}° (H->V)")
     tl.move_stage(HWP_IN_2, hwp_v, COMPORT)
     tl.move_stage(QWP_IN_2, qwp_v, COMPORT)
 
