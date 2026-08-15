@@ -310,14 +310,16 @@ def _set_bypass_optics():
 
 
 def _set_loop_optics():
-    """One loop pass: input H, loop-input plates rotate H->V so the photon
-    actually circulates ("H to V, just HWP at 45"), exit plate at 45° sends
-    it (or the switch) back out. Self-contained, same reasoning as
+    """One loop pass: input H, IN_2 rotates it to V on the way in; the
+    loop's fixed V-path plates do nothing, so it exits the loop as V.
+    OUT_2 is parked at 0/0 to do nothing, sending it straight back; it
+    crosses IN_2 again (V->H, same physical plates run in reverse), and
+    the loop's fixed H-path plates rotate that H to V, which is what
+    reaches the detector. Self-contained, same reasoning as
     _set_bypass_optics."""
     _set_input_basis('H')
     tl.move_stage(QWP_OUT_2, 0, COMPORT)
-    print("Setting HWP_OUT_2 to 45°")
-    tl.move_stage(HWP_OUT_2, 45, COMPORT)
+    tl.move_stage(HWP_OUT_2, 0, COMPORT)
     hwp_v, qwp_v = basis_angles['V']
     tl.move_stage(HWP_IN_2, hwp_v, COMPORT)
     tl.move_stage(QWP_IN_2, qwp_v, COMPORT)
