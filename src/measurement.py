@@ -416,8 +416,9 @@ def calibrate_loss():
         return {'ch': 2, 'delay_ns': delay2, 'counts': row2}
 
     def _run_ch4():
-        print("\nOne-loop pass — no fiber changes needed.")
         _set_loop_optics()
+        input("\nOne-loop pass — no fiber changes needed. Set the switch control "
+              "program to 'man set' for 1 loop, press Enter when ready...")
         delay4, row4 = _scan_and_record(4, center=st.CHANNELS[4]['delay'], span=3.0,
                                          record_duration=duration)
         return {'ch': 4, 'delay_ns': delay4, 'counts': row4}
