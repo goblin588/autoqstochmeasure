@@ -293,6 +293,19 @@ def _find_latest_loss_calibration():
     return path, json.loads(path.read_text())
 
 
+def _zero_path2_plates():
+    """Park every motorized path-2 plate (HWP_IN_2/QWP_IN_2/QWP_OUT_2/
+    HWP_OUT_2) at 0 — the known-idle state for any loss-calibration stage
+    that doesn't deliberately route light through them, so a plate left
+    somewhere else by an earlier stage (e.g. IN_2 at V from a loop-pass
+    stage) can't bleed into this one."""
+    print("Parking path-2 plates (HWP_IN_2/QWP_IN_2/QWP_OUT_2/HWP_OUT_2) at 0°")
+    tl.move_stage(HWP_IN_2, 0, COMPORT)
+    tl.move_stage(QWP_IN_2, 0, COMPORT)
+    tl.move_stage(QWP_OUT_2, 0, COMPORT)
+    tl.move_stage(HWP_OUT_2, 0, COMPORT)
+
+
 def _set_bypass_optics():
     """Zero-loop bypass: input H, every motorized path-2 plate parked at 0
     (nothing rotated into the loop) — the bypass itself is done by the
@@ -301,10 +314,7 @@ def _set_bypass_optics():
     depends on — self-contained so it's safe to run even if an earlier
     stage was skipped via resume."""
     _set_input_basis('H')
-    tl.move_stage(HWP_IN_2, 0, COMPORT)
-    tl.move_stage(QWP_IN_2, 0, COMPORT)
-    tl.move_stage(QWP_OUT_2, 0, COMPORT)
-    tl.move_stage(HWP_OUT_2, 0, COMPORT)
+    _zero_path2_plates()
     input("Manually set H2 to 45° and the switch control program to 'man set', "
           "press Enter when ready...")
 
@@ -389,6 +399,7 @@ def calibrate_loss():
         return meta
 
     def _run_source():
+        _zero_path2_plates()
         input("\nPlug both herald and signal directly into detectors "
               "(output detector), press Enter when ready...")
         ch0 = input("Detector channel the bare signal fiber landed on (default 2): ").strip()
@@ -401,6 +412,7 @@ def calibrate_loss():
                 'background_hz': bg0, 'background_point': bg0_point}
 
     def _run_source_dump():
+        _zero_path2_plates()
         input("\nPlug signal directly into the DUMP detector "
               "(herald stays connected), press Enter when ready...")
         delay0d, row0d = _scan_and_record(st.DUMP_CH, absolute_range=(0.0, 20.0), step=1.0,
