@@ -318,6 +318,7 @@ def scan_and_record(
     record_duration: float = 60.0,
     herald_ch: int = TRIGG_CH,
     herald_delay: float | None = None,
+    max_resweeps: int = 3,
 ):
     """Single-pass delay scan for `ch` (no zoom levels, unlike tune_delays),
     then a full-length recording at the best delay found.
@@ -334,7 +335,13 @@ def scan_and_record(
     herald delay was tuned for a completely different cable path and won't
     land the coincidence window anywhere near the real peak.
 
-    Opens one Logic16 context for both the scan and the final recording —
+    If the best point found is within 2 steps of either edge of the swept
+    window, the true peak may sit outside it, so the window is re-centred
+    on that best point (same span/step) and re-swept — up to
+    `max_resweeps` times — until the peak has 2 points of margin on both
+    sides, or the resweep budget runs out.
+
+    Opens one Logic16 context for the scan(s) and the final recording —
     mirrors tune_delays, never reopens the card per point.
 
     Returns (best_delay, row) where row has acquire_counts()'s dict shape:
@@ -348,20 +355,29 @@ def scan_and_record(
     delays = st.delays_for()
     if herald_delay is not None:
         delays[herald_ch - 1] = herald_delay
-    best_delay, best_counts = delays[ch - 1], -1.0
     with Logic16(coincidence_window=COINCIDENCE_WINDOW, logic_mode=True,
                  integration_window=scan_integration) as logic:
         logic.configure(threshold=THRESHOLDS, coincidence_window=COINCIDENCE_WINDOW)
-        for d in offsets:
-            delays[ch - 1] = float(d)
-            logic.set_delays(delays)
-            c, s, t = logic.read_counts_integrated(
-                pos_singles=[herald_ch, ch], pos_coincidence=[[herald_ch, ch]])
-            rate = c[0] / t if t > 0 else 0.0
-            print(f"  {d:+7.2f} ns: {c[0]:6.0f} coinc ({rate:6.1f} Hz)  "
-                  f"herald {s[0]:6.0f}  ch{ch} {s[1]:6.0f}")
-            if c[0] > best_counts:
-                best_counts, best_delay = c[0], float(d)
+
+        for attempt in range(max_resweeps + 1):
+            best_delay, best_counts, best_idx = delays[ch - 1], -1.0, 0
+            for i, d in enumerate(offsets):
+                delays[ch - 1] = float(d)
+                logic.set_delays(delays)
+                c, s, t = logic.read_counts_integrated(
+                    pos_singles=[herald_ch, ch], pos_coincidence=[[herald_ch, ch]])
+                rate = c[0] / t if t > 0 else 0.0
+                print(f"  {d:+7.2f} ns: {c[0]:6.0f} coinc ({rate:6.1f} Hz)  "
+                      f"herald {s[0]:6.0f}  ch{ch} {s[1]:6.0f}")
+                if c[0] > best_counts:
+                    best_counts, best_delay, best_idx = c[0], float(d), i
+
+            has_margin = 2 <= best_idx <= len(offsets) - 3
+            if has_margin or attempt == max_resweeps:
+                break
+            print(f"  peak at edge of scan window ({best_delay:+.2f} ns) — "
+                  f"resweeping centred there...")
+            offsets = best_delay + np.arange(-span, span + step / 2, step)
 
         print(f"  best: {best_delay:+.2f} ns ({best_counts:.0f} coinc) — "
               f"recording {record_duration:.0f}s...")
