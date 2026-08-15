@@ -354,11 +354,17 @@ def calibrate_loss():
     far enough off the real peak to see how much of C0/C0_dump is accidental
     floor rather than real coincidences.
 
-    loss_zero_loops = C_ch2/C0, loss_per_loop_pass = C_ch4/C_ch2,
-    loss_to_dump = C_dump/C_ch4 (extra factor on top of one loop pass, using
-    the loop-output detector as reference), loss_to_dump_raw = C_dump/C0_dump
-    (same numerator, but referenced to the dump detector's own raw baseline
-    instead — use whichever is the meaningful comparison for your model).
+    loss_zero_loops (a.k.a. input/coupling loss) = C_ch2/C0,
+    loss_per_loop_pass = C_ch4/C_ch2 — both isolate one stage's loss by
+    dividing out everything upstream of it, since every rate here already
+    carries the same input-coupling loss.
+
+    loss_to_dump follows the same idea but on the dump detector: raw
+    C_dump/C0_dump keeps both terms on the dump detector (so its own
+    detection efficiency cancels) but still carries the input-coupling loss
+    baked into both — divide that out by loss_zero_loops to get the
+    dump-diversion loss on its own, comparable to loss_per_loop_pass.
+    loss_to_dump_raw keeps the undivided C_dump/C0_dump for reference.
 
     Stages are picked from a menu, in any order, any number of times — not a
     fixed sequence. Each menu entry shows when it was last done. Saves after
@@ -481,10 +487,15 @@ def calibrate_loss():
         return s['counts'][f"coinc_ch{s['ch']}"] / s['counts']['int_time'] if s['counts']['int_time'] else 0.0
     C0, C0d, C2, C4, Cd = rate('source'), rate('source_dump'), rate('ch2'), rate('ch4'), rate('dump')
 
+    input_loss = C2 / C0 if C0 else None
     losses = {
-        'loss_zero_loops':    C2 / C0 if C0 else None,
+        'loss_zero_loops':    input_loss,
         'loss_per_loop_pass': C4 / C2 if C2 else None,
-        'loss_to_dump':       Cd / C4 if C4 else None,
+        # Cd/C0d is on the dump detector both times (its efficiency cancels),
+        # but still has input_loss baked into it same as Cd/C0d = input_loss *
+        # loss_to_dump — divide that out to isolate the dump-diversion loss
+        # itself, comparable to loss_per_loop_pass above.
+        'loss_to_dump':       (Cd / C0d) / input_loss if C0d and input_loss else None,
         'loss_to_dump_raw':   Cd / C0d if C0d else None,
     }
     meta = _save(losses=losses)
