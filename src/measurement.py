@@ -293,36 +293,20 @@ def _find_latest_loss_calibration():
     return path, json.loads(path.read_text())
 
 
-def _loss_stage(existing_stages, key, run):
-    """Check for an existing measurement of `key` (from a prior, possibly
-    interrupted, loss calibration); ask whether to reuse it or redo the
-    stage. `run()` performs the stage's prompts/waveplate moves/scan and
-    returns its result dict when redoing. Either way, returns the stage
-    dict with 'saved_at' set."""
-    prior = existing_stages.get(key)
-    if prior is not None:
-        when = prior.get('saved_at', 'unknown date')
-        choice = input(f"\nExisting '{key}' measurement from {when} found — "
-                        f"use it, or redo this stage? [Use/redo]: ").strip().lower()
-        if not choice.startswith('r'):
-            print(f"Using existing '{key}' data — skipping this stage.")
-            return prior
-    result = run()
-    result['saved_at'] = datetime.datetime.now().isoformat()
-    return result
-
-
 def _set_bypass_optics():
-    """Zero-loop bypass: input H, loop-input plates at 0 (nothing rotated
-    into the loop), exit plate at 45° sends it straight back out. Sets
-    every plate this stage depends on — self-contained so it's safe to run
-    even if an earlier stage was skipped via resume."""
+    """Zero-loop bypass: input H, every motorized path-2 plate parked at 0
+    (nothing rotated into the loop) — the bypass itself is done by the
+    manual H2 plate and the switch, neither of which this program can
+    drive, so it prompts for those instead. Sets everything this stage
+    depends on — self-contained so it's safe to run even if an earlier
+    stage was skipped via resume."""
     _set_input_basis('H')
     tl.move_stage(HWP_IN_2, 0, COMPORT)
     tl.move_stage(QWP_IN_2, 0, COMPORT)
     tl.move_stage(QWP_OUT_2, 0, COMPORT)
-    print("Setting HWP_OUT_2 to 45°")
-    tl.move_stage(HWP_OUT_2, 45, COMPORT)
+    tl.move_stage(HWP_OUT_2, 0, COMPORT)
+    input("Manually set H2 to 45° and the switch control program to 'man set', "
+          "press Enter when ready...")
 
 
 def _set_loop_optics():
@@ -340,18 +324,18 @@ def _set_loop_optics():
 
 
 def calibrate_loss():
-    """Guided 5-stage loss calibration:
-      0. source baseline, signal straight to the output detector      -> C0
-      1. source baseline, signal straight to the DUMP detector        -> C0_dump
-      2. zero-loop bypass, signal into setup, exits without looping   -> C_ch2
-      3. one loop pass, exits via the normal loop-output port         -> C_ch4
-      4. one loop pass, switch diverts to the dump port/detector      -> C_dump
+    """Menu-driven loss calibration over 5 stages:
+      source       source baseline, signal straight to the output detector      -> C0
+      source_dump  source baseline, signal straight to the DUMP detector        -> C0_dump
+      ch2          zero-loop bypass, signal into setup, exits without looping   -> C_ch2
+      ch4          one loop pass, exits via the normal loop-output port         -> C_ch4
+      dump         one loop pass, switch diverts to the dump port/detector      -> C_dump
 
-    Stages 0 and 1 are both raw, setup-free baselines (herald+signal direct
-    to a detector) — one through the output detector, one through the dump
-    detector — since the two are physically different detectors and may not
-    share a detection efficiency. Each is followed by a background check: a
-    single read at that stage's found peak delay +15ns (same
+    source/source_dump are both raw, setup-free baselines (herald+signal
+    direct to a detector) — one through the output detector, one through the
+    dump detector — since the two are physically different detectors and may
+    not share a detection efficiency. Each is followed by a background
+    check: a single read at that stage's found peak delay +15ns (same
     BACKGROUND_OFFSET_NS convention as calibrate_background/tune_delays),
     far enough off the real peak to see how much of C0/C0_dump is accidental
     floor rather than real coincidences.
@@ -362,28 +346,26 @@ def calibrate_loss():
     (same numerator, but referenced to the dump detector's own raw baseline
     instead — use whichever is the meaningful comparison for your model).
 
-    Resumable: saves after every stage (not just at the end), to
-    data/{timestamp}_loss_calibration.json. If a previous (possibly
-    interrupted) run's file exists, its stages are offered for reuse one at
-    a time instead of redoing them — so a bad dump reading, say, doesn't
-    mean redoing the source/ch2/ch4 stages too. Reusing continues writing
-    into that same file; starting fresh (no prior file, or redoing every
-    stage) creates a new one.
+    Stages are picked from a menu, in any order, any number of times — not a
+    fixed sequence. Each menu entry shows when it was last done. Saves after
+    every stage (not just at the end), to data/{timestamp}_loss_calibration.json.
+    If a previous (possibly interrupted) run's file exists, its stages are
+    loaded so they show up as already-done and count toward the final loss
+    computation without being re-run. Finishing computes losses from
+    whichever stages are on file — pick "compute & finish" once all 5 show a
+    done date.
     """
-    # Stages 0/1 are a bare source->detector connection, not the setup's
-    # usual fiber path — the calibrated herald delay (~3841ns, tuned for
-    # that usual path) doesn't apply here, so both the peak search and the
-    # background check pin herald to this instead.
+    # Stages source/source_dump are a bare source->detector connection, not
+    # the setup's usual fiber path — the calibrated herald delay (~3841ns,
+    # tuned for that usual path) doesn't apply here, so both the peak search
+    # and the background check pin herald to this instead.
     raw_herald_delay = 10.0
     duration = _ask_calibration_duration(default=30.0)
 
     path, existing = _find_latest_loss_calibration()
-    existing_stages = existing.get('stages', {})
-    if existing_stages:
-        print(f"Found an existing loss calibration ({path.name}) with stages: "
-              f"{', '.join(existing_stages)} — you'll be asked per stage whether to reuse them.")
-
-    stages = {}
+    stages = dict(existing.get('stages', {}))
+    if stages:
+        print(f"Found an existing loss calibration ({path.name}) — stages on file: {', '.join(stages)}.")
 
     def _save(losses=None):
         nonlocal path
@@ -403,7 +385,7 @@ def calibrate_loss():
         return meta
 
     def _run_source():
-        input("\nStage 0/4: plug both herald and signal directly into detectors "
+        input("\nPlug both herald and signal directly into detectors "
               "(output detector), press Enter when ready...")
         ch0 = input("Detector channel the bare signal fiber landed on (default 2): ").strip()
         ch0 = int(ch0) if ch0 else 2
@@ -414,11 +396,8 @@ def calibrate_loss():
         return {'ch': ch0, 'delay_ns': delay0, 'counts': row0,
                 'background_hz': bg0, 'background_point': bg0_point}
 
-    stages['source'] = _loss_stage(existing_stages, 'source', _run_source)
-    _save()
-
     def _run_source_dump():
-        input("\nStage 1/4: plug signal directly into the DUMP detector "
+        input("\nPlug signal directly into the DUMP detector "
               "(herald stays connected), press Enter when ready...")
         delay0d, row0d = _scan_and_record(st.DUMP_CH, absolute_range=(0.0, 20.0), step=1.0,
                                            record_duration=duration, herald_delay=raw_herald_delay)
@@ -427,38 +406,58 @@ def calibrate_loss():
         return {'ch': st.DUMP_CH, 'delay_ns': delay0d, 'counts': row0d,
                 'background_hz': bg0d, 'background_point': bg0d_point}
 
-    stages['source_dump'] = _loss_stage(existing_stages, 'source_dump', _run_source_dump)
-    _save()
-
     def _run_ch2():
-        input("\nStage 2/4: plug signal into the setup, press Enter when ready...")
+        input("\nPlug signal into the setup, press Enter when ready...")
         _set_bypass_optics()
         delay2, row2 = _scan_and_record(2, center=st.CHANNELS[2]['delay'], span=3.0,
                                          record_duration=duration)
         return {'ch': 2, 'delay_ns': delay2, 'counts': row2}
 
-    stages['ch2'] = _loss_stage(existing_stages, 'ch2', _run_ch2)
-    _save()
-
     def _run_ch4():
-        print("\nStage 3/4: one-loop pass — no fiber changes needed.")
+        print("\nOne-loop pass — no fiber changes needed.")
         _set_loop_optics()
         delay4, row4 = _scan_and_record(4, center=st.CHANNELS[4]['delay'], span=3.0,
                                          record_duration=duration)
         return {'ch': 4, 'delay_ns': delay4, 'counts': row4}
 
-    stages['ch4'] = _loss_stage(existing_stages, 'ch4', _run_ch4)
-    _save()
-
     def _run_dump():
         _set_loop_optics()
-        input("\nStage 4/4: set the switch to dump after 1 loop (dwell 60 ns) on the "
-              "switch control program, press Enter when ready...")
+        input("\nSet the switch control program to 'man set', then set it to dump "
+              "after 1 loop (dwell 60 ns), press Enter when ready...")
         delay7, row7 = _scan_and_record(st.DUMP_CH, center=st.DUMP_DELAYS[1], span=3.0,
                                          record_duration=duration)
         return {'ch': st.DUMP_CH, 'delay_ns': delay7, 'counts': row7}
 
-    stages['dump'] = _loss_stage(existing_stages, 'dump', _run_dump)
+    stage_menu = [
+        ('source', 'Calibrate signal herald (bare source -> output detector)', _run_source),
+        ('source_dump', 'Calibrate herald dump (bare source -> dump detector)', _run_source_dump),
+        ('ch2', 'Zero-loop bypass (signal into setup, no loop)', _run_ch2),
+        ('ch4', 'One loop pass (normal loop-output port)', _run_ch4),
+        ('dump', 'Loop then dump', _run_dump),
+    ]
+
+    while True:
+        print("\nLoss calibration stages:")
+        for i, (key, label, _) in enumerate(stage_menu, 1):
+            when = stages.get(key, {}).get('saved_at', 'never')
+            print(f"\t{i}. {label} (last done {when})")
+        choice = input("\t0. Compute losses & finish\n> ").strip()
+        if choice == '0':
+            break
+        try:
+            key, _, run = stage_menu[int(choice) - 1]
+        except (ValueError, IndexError):
+            print("Enter a number from the menu")
+            continue
+        result = run()
+        result['saved_at'] = datetime.datetime.now().isoformat()
+        stages[key] = result
+        _save()
+
+    missing = [key for key, _, _ in stage_menu if key not in stages]
+    if missing:
+        print(f"Missing stages, can't compute losses yet: {', '.join(missing)}")
+        return _save()
 
     def rate(stage_key):
         s = stages[stage_key]
@@ -911,7 +910,7 @@ def main():
             "\t6. Perform tomography (photon counting) + plot\n"
             "\t7. Check single input/output projector (phase tuning)\n"
             "\t8. Calibrate background noise (block/herald/setup, 3 steps)\n"
-            "\t9. Calibrate loss (guided, 5 stages)\n"
+            "\t9. Calibrate loss (menu of 5 stages)\n"
             )
 
         match n:
