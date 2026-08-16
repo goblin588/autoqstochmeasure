@@ -312,11 +312,11 @@ def coarse_scan(
     ch: int,
     start: float,
     stop: float,
-    step: float = 10.0,
+    step: float = 1.0,
     scan_integration: float = 1.0,
     herald_ch: int = TRIGG_CH,
     herald_delay: float | None = None,
-    early_stop_frac: float = 0.2,
+    early_stop_frac: float = 0.005,
 ):
     """Cheap coarse scan from `start` to `stop` (either direction — `stop`
     may be below `start` to count down) to locate the approximate peak — no
