@@ -278,7 +278,7 @@ def _scan_and_record(ch, **kwargs):
 def _coarse_scan(ch, **kwargs):
     """SIM-guarded wrapper around countingcard.coarse_scan."""
     if SIM_MODE:
-        return kwargs.get('lo', 0.0)
+        return kwargs.get('start', 0.0)
     from libraries.countingcard import coarse_scan
     return coarse_scan(ch, **kwargs)
 
@@ -364,15 +364,20 @@ def calibrate_loss():
     floor rather than real coincidences.
 
     input taps the signal right before it enters the switch (after the usual
-    input-prep waveplates) — an ad hoc connection like source/source_dump,
-    with no tuned channel delay to start from. First time, a cheap 0-3000ns
-    coarse_scan locates the approximate peak (stopping early once counts
-    drop under 1/5 of the running max, rather than scanning the empty tail
-    all the way to 3000ns); every time after, the delay found last time is
-    reused directly. Either way, a +/-10ns scan_and_record fine sweep around
-    that point finds and records the real peak (its own edge-resweep still
-    applies within that). Run this stage LAST — unplugging the fiber to tap
-    it disturbs the polarisation for anything downstream.
+    input-prep waveplates) — the signal side is an ad hoc connection like
+    source/source_dump, but the herald side isn't: this tap is still on the
+    setup's usual herald path, so herald stays at its normal calibrated
+    delay (~3841ns) rather than being pinned low like source/source_dump.
+    The signal photon arrives sooner here than via the full loop path, so
+    its matching delay sits below the herald's. First time, a cheap
+    coarse_scan counts down from the herald's delay to locate the
+    approximate peak (stopping early once counts drop under 1/5 of the
+    running max, rather than scanning all the way to 0); every time after,
+    the delay found last time is reused directly. Either way, a +/-10ns
+    scan_and_record fine sweep around that point finds and records the real
+    peak (its own edge-resweep still applies within that). Run this stage
+    LAST — unplugging the fiber to tap it disturbs the polarisation for
+    anything downstream.
 
     Returns/reports five quantities:
       det_eff_setup       reference efficiency, fixed at 1.0
@@ -488,11 +493,18 @@ def calibrate_loss():
               "and plug it directly into a detector, press Enter when ready...")
         ch_in = input("Detector channel the signal fiber landed on (default 2): ").strip()
         ch_in = int(ch_in) if ch_in else 2
+        # Herald stays at its normal calibrated delay (st.CHANNELS[TRIGG_CH]
+        # ~3841ns) — unlike source/source_dump, this tap is still on the
+        # setup's usual herald path, only the signal side is ad hoc. The
+        # signal photon arrives sooner here than via the full loop path, so
+        # its matching delay sits below the herald's — scan down from there.
+        herald_delay_normal = st.CHANNELS[TRIGG_CH]['delay']
         if prior is None:
-            print("No prior delay on file — coarse-scanning 0-3000ns to locate the peak...")
-            prior = _coarse_scan(ch_in, lo=0.0, hi=3000.0, herald_delay=raw_herald_delay)
+            print(f"No prior delay on file — coarse-scanning down from the herald's "
+                  f"{herald_delay_normal:.0f}ns delay to locate the peak...")
+            prior = _coarse_scan(ch_in, start=herald_delay_normal, stop=0.0)
         delay_in, row_in = _scan_and_record(ch_in, center=prior, span=10.0, step=1.0,
-                                             record_duration=duration, herald_delay=raw_herald_delay)
+                                             record_duration=duration)
         return {'ch': ch_in, 'delay_ns': delay_in, 'counts': row_in}
 
     stage_menu = [

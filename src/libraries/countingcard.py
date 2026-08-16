@@ -310,24 +310,28 @@ def tune_delays(
 
 def coarse_scan(
     ch: int,
-    lo: float,
-    hi: float,
+    start: float,
+    stop: float,
     step: float = 10.0,
     scan_integration: float = 1.0,
     herald_ch: int = TRIGG_CH,
     herald_delay: float | None = None,
     early_stop_frac: float = 0.2,
 ):
-    """Cheap coarse scan over [lo, hi] to locate the approximate peak —
-    no final recording, just returns the best delay found, for a caller to
+    """Cheap coarse scan from `start` to `stop` (either direction — `stop`
+    may be below `start` to count down) to locate the approximate peak — no
+    final recording, just returns the best delay found, for a caller to
     center a proper scan_and_record() fine sweep on afterwards.
 
     Tracks the running max counts seen; once a point falls under
     `early_stop_frac` of that max, the peak has clearly been passed, so the
-    remaining (empty) tail of the range is skipped rather than scanned.
+    remaining (empty) tail of the range is skipped rather than scanned —
+    most useful when `start` is already close to the real peak, so it's
+    found early and the scan cuts short instead of running to `stop`.
     """
     import libraries.settings as st
-    offsets = np.arange(lo, hi + step / 2, step)
+    signed_step = step if stop >= start else -step
+    offsets = np.arange(start, stop + signed_step / 2, signed_step)
     delays = st.delays_for()
     if herald_delay is not None:
         delays[herald_ch - 1] = herald_delay
