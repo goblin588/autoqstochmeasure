@@ -308,6 +308,49 @@ def tune_delays(
         print("Not saved — tuned delays apply for this session only.")
 
 
+def coarse_scan(
+    ch: int,
+    lo: float,
+    hi: float,
+    step: float = 10.0,
+    scan_integration: float = 1.0,
+    herald_ch: int = TRIGG_CH,
+    herald_delay: float | None = None,
+    early_stop_frac: float = 0.2,
+):
+    """Cheap coarse scan over [lo, hi] to locate the approximate peak —
+    no final recording, just returns the best delay found, for a caller to
+    center a proper scan_and_record() fine sweep on afterwards.
+
+    Tracks the running max counts seen; once a point falls under
+    `early_stop_frac` of that max, the peak has clearly been passed, so the
+    remaining (empty) tail of the range is skipped rather than scanned.
+    """
+    import libraries.settings as st
+    offsets = np.arange(lo, hi + step / 2, step)
+    delays = st.delays_for()
+    if herald_delay is not None:
+        delays[herald_ch - 1] = herald_delay
+    with Logic16(coincidence_window=COINCIDENCE_WINDOW, logic_mode=True,
+                 integration_window=scan_integration) as logic:
+        logic.configure(threshold=THRESHOLDS, coincidence_window=COINCIDENCE_WINDOW)
+        best_delay, best_counts = delays[ch - 1], -1.0
+        for d in offsets:
+            delays[ch - 1] = float(d)
+            logic.set_delays(delays)
+            c, s, t = logic.read_counts_integrated(
+                pos_singles=[herald_ch, ch], pos_coincidence=[[herald_ch, ch]])
+            rate = c[0] / t if t > 0 else 0.0
+            print(f"  {d:+7.1f} ns: {c[0]:6.0f} coinc ({rate:6.1f} Hz)")
+            if c[0] > best_counts:
+                best_counts, best_delay = c[0], float(d)
+            elif best_counts > 0 and c[0] < best_counts * early_stop_frac:
+                print(f"  dropped below {early_stop_frac:.0%} of peak ({best_counts:.0f} coinc) "
+                      f"— stopping coarse scan early")
+                break
+    return best_delay
+
+
 def scan_and_record(
     ch: int,
     center: float | None = None,

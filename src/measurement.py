@@ -275,6 +275,14 @@ def _scan_and_record(ch, **kwargs):
     return scan_and_record(ch, **kwargs)
 
 
+def _coarse_scan(ch, **kwargs):
+    """SIM-guarded wrapper around countingcard.coarse_scan."""
+    if SIM_MODE:
+        return kwargs.get('lo', 0.0)
+    from libraries.countingcard import coarse_scan
+    return coarse_scan(ch, **kwargs)
+
+
 def _measure_background(ch, **kwargs):
     """SIM-guarded wrapper around countingcard.measure_background."""
     if SIM_MODE:
@@ -356,12 +364,15 @@ def calibrate_loss():
     floor rather than real coincidences.
 
     input taps the signal right before it enters the switch (after the usual
-    input-prep waveplates) — an ad hoc connection like source/source_dump, so
-    it gets its own wide first-time scan (20-150ns) rather than reusing a
-    tuned channel delay. Once found, that delay is saved and reused as the
-    center of a +/-10ns scan next time (scan_and_record's own edge-resweep
-    still applies within that). Run this stage LAST — unplugging the fiber
-    to tap it disturbs the polarisation for anything downstream.
+    input-prep waveplates) — an ad hoc connection like source/source_dump,
+    with no tuned channel delay to start from. First time, a cheap 0-3000ns
+    coarse_scan locates the approximate peak (stopping early once counts
+    drop under 1/5 of the running max, rather than scanning the empty tail
+    all the way to 3000ns); every time after, the delay found last time is
+    reused directly. Either way, a +/-10ns scan_and_record fine sweep around
+    that point finds and records the real peak (its own edge-resweep still
+    applies within that). Run this stage LAST — unplugging the fiber to tap
+    it disturbs the polarisation for anything downstream.
 
     Returns/reports five quantities:
       det_eff_setup       reference efficiency, fixed at 1.0
@@ -478,11 +489,10 @@ def calibrate_loss():
         ch_in = input("Detector channel the signal fiber landed on (default 2): ").strip()
         ch_in = int(ch_in) if ch_in else 2
         if prior is None:
-            delay_in, row_in = _scan_and_record(ch_in, absolute_range=(20.0, 150.0), step=1.0,
-                                                 record_duration=duration, herald_delay=raw_herald_delay)
-        else:
-            delay_in, row_in = _scan_and_record(ch_in, center=prior, span=10.0, step=1.0,
-                                                 record_duration=duration, herald_delay=raw_herald_delay)
+            print("No prior delay on file — coarse-scanning 0-3000ns to locate the peak...")
+            prior = _coarse_scan(ch_in, lo=0.0, hi=3000.0, herald_delay=raw_herald_delay)
+        delay_in, row_in = _scan_and_record(ch_in, center=prior, span=10.0, step=1.0,
+                                             record_duration=duration, herald_delay=raw_herald_delay)
         return {'ch': ch_in, 'delay_ns': delay_in, 'counts': row_in}
 
     stage_menu = [
