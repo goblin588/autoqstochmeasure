@@ -126,6 +126,13 @@ MEASUREMENT_INTEGRATION_S = 1.0  # seconds per row in measurement(); raise if 1 
 
 BACKGROUND_OFFSET_NS = 15.0  # off a channel's tuned delay = misses the real photon, counts accidentals only
 
+# Quick background check run automatically at the start of every measurement()
+# call (distinct from BACKGROUND_OFFSET_NS/calibrate_background, which is a
+# separate deliberate calibration step) — offset is bigger since 15ns can
+# still catch the tail of a slow channel's peak.
+MEASUREMENT_BG_OFFSET_NS = 20.0
+MEASUREMENT_BG_DURATION_S = 10.0
+
 # tune_delays' per-channel integration time (s): later loops lose more photons,
 # so their coincidence peak needs longer collection to clear the noise floor.
 # Anchored on ch2 (~1.5 s, plenty of signal) and ch12 (~15 s, barely any left);

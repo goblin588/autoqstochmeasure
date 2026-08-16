@@ -145,10 +145,15 @@ def _git_commit():
         return None
 
 
-def _save_results(rows, N, label):
+def _save_results(rows, N, label, background=None):
     """Write rows to data/{timestamp}_measurement_N{N}_s{label}.csv, plus a
     same-named .json sidecar recording the delays/thresholds/etc. in effect
     for the run — so old data stays interpretable after later recalibration.
+
+    background is the row from _acquire_background() taken at the start of
+    this run, if any — stored alongside so each measurement carries its own
+    accidental-coincidence floor rather than relying only on the separate
+    noise_calibration pointer.
 
     Timestamp leads so filenames sort most-recent-last (ls default order).
     Called from finally — saves whatever rows exist even mid-sweep.
@@ -183,6 +188,8 @@ def _save_results(rows, N, label):
         # clone/checkout the data/ directory ends up analysed from
         'noise_calibration': ({'file': calibration.name, 'saved_at': _calibration_date(calibration)}
                               if calibration else None),
+        'background_offset_ns': st.MEASUREMENT_BG_OFFSET_NS,
+        'background': background,
     }
     with open(f"{stem}.json", 'w') as f:
         json.dump(meta, f, indent=1)
@@ -223,6 +230,23 @@ def _acquire_counts_all(duration, delays=None):
     from libraries.countingcard import acquire_counts
     return acquire_counts(duration, signal_chs=DET_CHS,
                            delays=delays if delays is not None else delays_for())
+
+
+def _acquire_background(N, duration=None):
+    """Quick background/accidental-coincidence check for N's channels, run
+    automatically at the start of measurement() — every channel's delay
+    bumped +MEASUREMENT_BG_OFFSET_NS ns off its tuned value (herald left
+    alone), same convention as calibrate_background, so the coincidence
+    window misses the real photon and counts only accidentals."""
+    chs = st.det_chs_for(N)
+    duration = duration if duration is not None else st.MEASUREMENT_BG_DURATION_S
+    if SIM_MODE:
+        return _sim_row(duration, chs)
+    from libraries.countingcard import acquire_counts
+    delays = delays_for()
+    for ch in chs:
+        delays[ch - 1] += st.MEASUREMENT_BG_OFFSET_NS
+    return acquire_counts(duration, signal_chs=chs, delays=delays)
 
 
 def calibrate_background():
@@ -652,6 +676,13 @@ def measurement(N, performTomo=False, js=None):
     completion one at a time, so slow drift doesn't bias one setting more
     than another. Everything goes to one file; rows carry an input_state
     column (= j).
+
+    Before the run starts, a quick _acquire_background(N) check (delays
+    bumped +MEASUREMENT_BG_OFFSET_NS ns off tuned, same convention as
+    calibrate_background) is saved into the sidecar JSON alongside the
+    rows — one accidental-coincidence reading per run, not just a pointer
+    to whichever separate noise_calibration happened to be most recent.
+
     Returns the list of result rows so callers can aggregate.
     """
     _maybe_calibrate()
@@ -668,6 +699,11 @@ def measurement(N, performTomo=False, js=None):
         print(f"This measurement will take {_format_duration(total * len(settings))}.")
         if input("Press Enter to begin, or c to change the duration: ").strip().lower() != 'c':
             break
+
+    print(f"Measuring background (+{st.MEASUREMENT_BG_OFFSET_NS:.0f}ns off tuned delays, "
+          f"{st.MEASUREMENT_BG_DURATION_S:.0f}s)...")
+    background = _acquire_background(N)
+    print(f"  {background}")
 
     _set_unitary(N)
     _remind_switch_dwell(N)
@@ -701,7 +737,7 @@ def measurement(N, performTomo=False, js=None):
     finally:
         # runs on success, error, or Ctrl-C — partial data still gets saved
         label = 'all' if js == _input_states(N) else '-'.join(map(str, js)) if len(js) > 1 else js[0]
-        _save_results(rows, N, label)
+        _save_results(rows, N, label, background=background)
         notify(f"Measurement N={N} done ({len(rows)} rows)",
                title="Measurement Complete", priority="high")
         if time.monotonic() - start > 300:
