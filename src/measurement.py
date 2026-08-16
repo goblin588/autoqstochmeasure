@@ -338,12 +338,13 @@ def _set_loop_optics():
 
 
 def calibrate_loss():
-    """Menu-driven loss calibration over 5 stages:
+    """Menu-driven loss calibration over 6 stages:
       source       source baseline, signal straight to the output detector      -> C0
       source_dump  source baseline, signal straight to the DUMP detector        -> C0_dump
       ch2          zero-loop bypass, signal into setup, exits without looping   -> C_ch2
       ch4          one loop pass, exits via the normal loop-output port         -> C_ch4
       dump         one loop pass, switch diverts to the dump port/detector      -> C_dump
+      input        signal after input prep, tapped right before the switch     -> C_in
 
     source/source_dump are both raw, setup-free baselines (herald+signal
     direct to a detector) — one through the output detector, one through the
@@ -354,17 +355,34 @@ def calibrate_loss():
     far enough off the real peak to see how much of C0/C0_dump is accidental
     floor rather than real coincidences.
 
-    loss_zero_loops (a.k.a. input/coupling loss) = C_ch2/C0,
-    loss_per_loop_pass = C_ch4/C_ch2 — both isolate one stage's loss by
-    dividing out everything upstream of it, since every rate here already
-    carries the same input-coupling loss.
+    input taps the signal right before it enters the switch (after the usual
+    input-prep waveplates) — an ad hoc connection like source/source_dump, so
+    it gets its own wide first-time scan (20-150ns) rather than reusing a
+    tuned channel delay. Once found, that delay is saved and reused as the
+    center of a +/-10ns scan next time (scan_and_record's own edge-resweep
+    still applies within that). Run this stage LAST — unplugging the fiber
+    to tap it disturbs the polarisation for anything downstream.
 
-    loss_to_dump follows the same idea but on the dump detector: raw
-    C_dump/C0_dump keeps both terms on the dump detector (so its own
-    detection efficiency cancels) but still carries the input-coupling loss
-    baked into both — divide that out by loss_zero_loops to get the
-    dump-diversion loss on its own, comparable to loss_per_loop_pass.
-    loss_to_dump_raw keeps the undivided C_dump/C0_dump for reference.
+    Returns/reports five quantities:
+      det_eff_setup       reference efficiency, fixed at 1.0
+      det_eff_dump        dump detector's efficiency relative to the setup
+                           detector = C0_dump/C0 (both stages share the same
+                           bare-source input, so this isolates the two
+                           detectors' relative efficiency)
+      loss_input_to_setup input-to-loop coupling loss = C_ch2/C_in
+      loss_per_loop_pass  = C_ch4/C_ch2 — isolates one stage's loss by
+                           dividing out everything upstream of it, since
+                           every rate here already carries the same
+                           input-coupling loss
+      loss_to_dump         loss_input_to_setup + loop-to-dump diversion loss
+                           together — the dump path never goes through the
+                           loop-pass optics that ch4/loss_per_loop_pass does,
+                           it diverts straight to the dump port off the same
+                           switch entrance as ch2. C_dump/(C_in*det_eff_dump)
+                           normalises C_dump to the setup detector's
+                           efficiency via det_eff_dump, then divides by C_in
+                           — so it still carries loss_input_to_setup baked
+                           in, same as loss_input_to_setup isn't divided out.
 
     Stages are picked from a menu, in any order, any number of times — not a
     fixed sequence. Each menu entry shows when it was last done. Saves after
@@ -372,7 +390,7 @@ def calibrate_loss():
     If a previous (possibly interrupted) run's file exists, its stages are
     loaded so they show up as already-done and count toward the final loss
     computation without being re-run. Finishing computes losses from
-    whichever stages are on file — pick "compute & finish" once all 5 show a
+    whichever stages are on file — pick "compute & finish" once all 6 show a
     done date.
     """
     # Stages source/source_dump are a bare source->detector connection, not
@@ -387,7 +405,7 @@ def calibrate_loss():
     if stages:
         print(f"Found an existing loss calibration ({path.name}) — stages on file: {', '.join(stages)}.")
 
-    def _save(losses=None):
+    def _save(losses=None, rates=None):
         nonlocal path
         if path is None:
             os.makedirs(st.DATA_DIR, exist_ok=True)
@@ -400,6 +418,8 @@ def calibrate_loss():
         }
         if losses is not None:
             meta['losses'] = losses
+        if rates is not None:
+            meta['coincidence_rates_hz'] = rates
         path.write_text(json.dumps(meta, indent=1))
         print(f"  (saved -> {path.name})")
         return meta
@@ -451,12 +471,27 @@ def calibrate_loss():
                                          record_duration=duration)
         return {'ch': st.DUMP_CH, 'delay_ns': delay7, 'counts': row7}
 
+    def _run_input():
+        prior = stages.get('input', {}).get('delay_ns')
+        input("\nLAST STAGE — unplug the signal fiber just before the switch "
+              "and plug it directly into a detector, press Enter when ready...")
+        ch_in = input("Detector channel the signal fiber landed on (default 2): ").strip()
+        ch_in = int(ch_in) if ch_in else 2
+        if prior is None:
+            delay_in, row_in = _scan_and_record(ch_in, absolute_range=(20.0, 150.0), step=1.0,
+                                                 record_duration=duration, herald_delay=raw_herald_delay)
+        else:
+            delay_in, row_in = _scan_and_record(ch_in, center=prior, span=10.0, step=1.0,
+                                                 record_duration=duration, herald_delay=raw_herald_delay)
+        return {'ch': ch_in, 'delay_ns': delay_in, 'counts': row_in}
+
     stage_menu = [
         ('source', 'Calibrate signal herald (bare source -> output detector)', _run_source),
         ('source_dump', 'Calibrate herald dump (bare source -> dump detector)', _run_source_dump),
         ('ch2', 'Zero-loop bypass (signal into setup, no loop)', _run_ch2),
         ('ch4', 'One loop pass (normal loop-output port)', _run_ch4),
         ('dump', 'Loop then dump', _run_dump),
+        ('input', 'Input into switch (LAST — disturbs polarisation)', _run_input),
     ]
 
     while True:
@@ -485,20 +520,25 @@ def calibrate_loss():
     def rate(stage_key):
         s = stages[stage_key]
         return s['counts'][f"coinc_ch{s['ch']}"] / s['counts']['int_time'] if s['counts']['int_time'] else 0.0
-    C0, C0d, C2, C4, Cd = rate('source'), rate('source_dump'), rate('ch2'), rate('ch4'), rate('dump')
+    C0, C0d, C2, C4, Cd, Cin = (rate('source'), rate('source_dump'), rate('ch2'),
+                                rate('ch4'), rate('dump'), rate('input'))
+    rates = {'C0': C0, 'C0d': C0d, 'C2': C2, 'C4': C4, 'Cd': Cd, 'Cin': Cin}
 
-    input_loss = C2 / C0 if C0 else None
+    input_loss = C2 / Cin if Cin else None
+    det_eff_dump = C0d / C0 if C0 else None
     losses = {
-        'loss_zero_loops':    input_loss,
-        'loss_per_loop_pass': C4 / C2 if C2 else None,
-        # Cd/C0d is on the dump detector both times (its efficiency cancels),
-        # but still has input_loss baked into it same as Cd/C0d = input_loss *
-        # loss_to_dump — divide that out to isolate the dump-diversion loss
-        # itself, comparable to loss_per_loop_pass above.
-        'loss_to_dump':       (Cd / C0d) / input_loss if C0d and input_loss else None,
-        'loss_to_dump_raw':   Cd / C0d if C0d else None,
+        'det_eff_setup':       1.0,
+        'det_eff_dump':        det_eff_dump,
+        'loss_input_to_setup': input_loss,
+        'loss_per_loop_pass':  C4 / C2 if C2 else None,
+        # Cd is on the dump detector, Cin isn't — normalise Cd to the setup
+        # detector's efficiency via det_eff_dump first, then divide by Cin.
+        # Diverts straight off the switch entrance, same as ch2 — never
+        # touches the loop-pass optics ch4 does — so this is
+        # loss_input_to_setup * loop-to-dump diversion loss, not per_loop_pass.
+        'loss_to_dump':        Cd / (Cin * det_eff_dump) if Cin and det_eff_dump else None,
     }
-    meta = _save(losses=losses)
+    meta = _save(losses=losses, rates=rates)
     print(f"\nSaved -> {path}")
     print(f"losses: {losses}")
     notify("Loss calibration done", title="Calibration Complete")
