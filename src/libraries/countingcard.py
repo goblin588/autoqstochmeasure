@@ -226,83 +226,97 @@ def tune_delays(
         logic.configure(threshold=THRESHOLDS, coincidence_window=windows[0])
         print(f"Tuning {len(order)} channels, zooming through windows {windows} ns "
               f"(step from {step:.2g} ns, floor {min_step:.2g} ns)")
-        for i, ch in enumerate(order, 1):
-            delays = st.delays_for()
-            current = delays[ch - 1]
-            base_integration = integration_time if integration_time is not None \
-                else st.TUNE_INTEGRATION_S.get(ch, 10.0)
-            print(f"[{i}/{len(order)}] scanning ch{ch} around {current:.0f} ns "
-                  f"({base_integration:.2g}s/point):", flush=True)
+        interrupted = False
+        try:
+            for i, ch in enumerate(order, 1):
+                delays = st.delays_for()
+                current = delays[ch - 1]
+                base_integration = integration_time if integration_time is not None \
+                    else st.TUNE_INTEGRATION_S.get(ch, 10.0)
+                print(f"[{i}/{len(order)}] scanning ch{ch} around {current:.0f} ns "
+                      f"({base_integration:.2g}s/point):", flush=True)
 
-            best = current
-            scan_span, scan_step = span, step
-            first_pass = True
-            for window in windows:
-                pass_integration = base_integration * (2 if window <= small_window_ns else 1)
-                logic.set_integration_window(pass_integration)
-                logic.set_coincidence_window(window)
-                offsets = np.arange(-scan_span, scan_span + scan_step / 2, scan_step)
-                counts = []
-                for off in offsets:
-                    delays[ch - 1] = best + off
-                    logic.set_delays(delays)
-                    c, s, t = logic.read_counts_integrated(
-                        pos_singles=[herald_ch, ch],
-                        pos_coincidence=[[herald_ch, ch]])
-                    counts.append(c[0])
-                    rate = c[0] / t if t > 0 else 0.0
-                    print(f"  win {window:.2g} ns  {best + off:+7.2f} ns: {c[0]:6.0f} coinc "
-                          f"({rate:7.1f} Hz)  herald {s[0]:6.0f}  ch{ch} {s[1]:6.0f}", flush=True)
-                counts = np.array(counts)
-                best_idx = int(np.argmax(counts))
-                best = float(best + offsets[best_idx])
-                peak_counts = float(counts[best_idx])
+                best = current
+                scan_span, scan_step = span, step
+                first_pass = True
+                for window in windows:
+                    pass_integration = base_integration * (2 if window <= small_window_ns else 1)
+                    logic.set_integration_window(pass_integration)
+                    logic.set_coincidence_window(window)
+                    offsets = np.arange(-scan_span, scan_span + scan_step / 2, scan_step)
+                    counts = []
+                    for off in offsets:
+                        delays[ch - 1] = best + off
+                        logic.set_delays(delays)
+                        c, s, t = logic.read_counts_integrated(
+                            pos_singles=[herald_ch, ch],
+                            pos_coincidence=[[herald_ch, ch]])
+                        counts.append(c[0])
+                        rate = c[0] / t if t > 0 else 0.0
+                        print(f"  win {window:.2g} ns  {best + off:+7.2f} ns: {c[0]:6.0f} coinc "
+                              f"({rate:7.1f} Hz)  herald {s[0]:6.0f}  ch{ch} {s[1]:6.0f}", flush=True)
+                    counts = np.array(counts)
+                    best_idx = int(np.argmax(counts))
+                    best = float(best + offsets[best_idx])
+                    peak_counts = float(counts[best_idx])
 
-                if first_pass:
-                    if ch == ref_ch:
-                        bg_delays = st.delays_for()
-                        bg_delays[ch - 1] = best + background_offset
-                        logic.set_delays(bg_delays)
-                        bg_counts = []
-                        for _ in range(background_samples):
-                            c, _s, t = logic.read_counts_integrated(
-                                pos_singles=[herald_ch, ch], pos_coincidence=[[herald_ch, ch]])
-                            bg_counts.append(c[0])
-                        background = float(np.mean(bg_counts))
-                        min_bar = max(min_counts, background)
-                        print(f"  background @ {best + background_offset:+.0f} ns "
-                              f"(avg of {background_samples}): {background:.1f} counts "
-                              f"-> minimum-count bar = {min_bar:.1f}", flush=True)
-                    if peak_counts < min_bar:
-                        print(f"ch{ch}: peak {peak_counts:.0f} counts below the {min_bar:.1f} bar — "
-                              f"no clear signal, delay left at {current:.0f} ns")
-                        best = current
-                        break
-                    first_pass = False
+                    if first_pass:
+                        if ch == ref_ch:
+                            bg_delays = st.delays_for()
+                            bg_delays[ch - 1] = best + background_offset
+                            logic.set_delays(bg_delays)
+                            bg_counts = []
+                            for _ in range(background_samples):
+                                c, _s, t = logic.read_counts_integrated(
+                                    pos_singles=[herald_ch, ch], pos_coincidence=[[herald_ch, ch]])
+                                bg_counts.append(c[0])
+                            background = float(np.mean(bg_counts))
+                            min_bar = max(min_counts, background)
+                            print(f"  background @ {best + background_offset:+.0f} ns "
+                                  f"(avg of {background_samples}): {background:.1f} counts "
+                                  f"-> minimum-count bar = {min_bar:.1f}", flush=True)
+                        if peak_counts < min_bar:
+                            print(f"ch{ch}: peak {peak_counts:.0f} counts below the {min_bar:.1f} bar — "
+                                  f"no clear signal, delay left at {current:.0f} ns")
+                            best = current
+                            break
+                        first_pass = False
 
-                scan_step = max(scan_step / 2, min_step)
-                # span shrinks faster than step/window — re-centring on the
-                # best point each pass means it doesn't need to stay wide
-                scan_span = max(scan_span / 4, scan_step * 2)
+                    scan_step = max(scan_step / 2, min_step)
+                    # span shrinks faster than step/window — re-centring on the
+                    # best point each pass means it doesn't need to stay wide
+                    scan_span = max(scan_span / 4, scan_step * 2)
 
-            if best != current:
-                st.CHANNELS[ch]['delay'] = best
-                print(f"ch{ch}: {current:.0f} -> {best:.2f} ns (CHANNELS[{ch}]), "
-                      f"peak {peak_counts:.0f} counts at {windows[-1]:.2g} ns window", flush=True)
-            changes[ch] = (current, best)
+                if best != current:
+                    st.CHANNELS[ch]['delay'] = best
+                    print(f"ch{ch}: {current:.0f} -> {best:.2f} ns (CHANNELS[{ch}]), "
+                          f"peak {peak_counts:.0f} counts at {windows[-1]:.2g} ns window", flush=True)
+                changes[ch] = (current, best)
+        except KeyboardInterrupt:
+            interrupted = True
+            print("\nInterrupted — showing delays found for channels already tuned.")
 
         logic.set_coincidence_window(experiment_window)
     print(f"Coincidence window set to {experiment_window:.2g} ns for the experiment "
           f"(tuning itself zoomed down to {windows[-1]:.2g} ns for precision).")
-    print(f"Background used for minimum-count bar: {background:.1f} counts/"
-          f"{integration_time:.2g}s (avg of {background_samples} samples, "
-          f"ch{ref_ch} at {background_offset:+.0f} ns off its peak) -> bar = {min_bar:.1f}")
+    if background is not None:
+        int_desc = f"{integration_time:.2g}s" if integration_time is not None else "per-channel default"
+        print(f"Background used for minimum-count bar: {background:.1f} counts/{int_desc} "
+              f"(avg of {background_samples} samples, "
+              f"ch{ref_ch} at {background_offset:+.0f} ns off its peak) -> bar = {min_bar:.1f}")
     print("Delay summary (before -> after):")
     for ch in order:
+        if ch not in changes:
+            continue
         before, after = changes[ch]
         note = " (updated)" if after != before else " (unchanged)"
         print(f"  ch{ch}: {before:.0f} ns -> {after:.2f} ns{note}")
-    if input("Save tuned delays as new defaults? [y/N] ").strip().lower() == 'y':
+    if not changes:
+        print("Nothing tuned yet — nothing to save.")
+        return
+    prompt = "Save the delays found so far as new defaults? [y/N] " if interrupted \
+        else "Save tuned delays as new defaults? [y/N] "
+    if input(prompt).strip().lower() == 'y':
         st.save_calibration()
     else:
         print("Not saved — tuned delays apply for this session only.")
