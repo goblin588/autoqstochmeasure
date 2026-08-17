@@ -8,6 +8,7 @@ import csv
 import json
 import os
 import socket
+import statistics
 import subprocess
 import sys
 import datetime
@@ -306,7 +307,10 @@ def _scan_and_record(ch, **kwargs):
     """SIM-guarded wrapper around countingcard.scan_and_record, same shape
     as _acquire_counts_all."""
     if SIM_MODE:
-        return kwargs.get('center', 0.0), _sim_row(kwargs.get('record_duration', 60.0), [ch])
+        n_bins = kwargs.get('n_bins', 20)
+        row = _sim_row(kwargs.get('record_bin_s', 5.0) * n_bins, [ch])
+        row[f'coinc_ch{ch}_bins'] = [0] * n_bins
+        return kwargs.get('center', 0.0), row
     from libraries.countingcard import scan_and_record
     return scan_and_record(ch, **kwargs)
 
@@ -394,10 +398,16 @@ def calibrate_loss():
     direct to a detector) — one through the output detector, one through the
     dump detector — since the two are physically different detectors and may
     not share a detection efficiency. Each is followed by a background
-    check: a single read at that stage's found peak delay +15ns (same
-    BACKGROUND_OFFSET_NS convention as calibrate_background/tune_delays),
-    far enough off the real peak to see how much of C0/C0_dump is accidental
-    floor rather than real coincidences.
+    check at that stage's found peak delay +15ns (same BACKGROUND_OFFSET_NS
+    convention as calibrate_background/tune_delays), far enough off the
+    real peak to see how much of C0/C0_dump is accidental floor rather than
+    real coincidences.
+
+    Every stage's peak recording (and the background check) is 20 x 5s
+    bins rather than one long read — the per-bin counts are kept on file,
+    and losses/rates are reported as mean +/- SEM (std/sqrt(20)), with
+    errors propagated through each ratio (relative errors combine in
+    quadrature). Every losses/rates key has an "_err" companion.
 
     input taps the signal right before it enters the switch (after the usual
     input-prep waveplates) — the signal side is an ad hoc connection like
@@ -450,7 +460,6 @@ def calibrate_loss():
     # tuned for that usual path) doesn't apply here, so both the peak search
     # and the background check pin herald to this instead.
     raw_herald_delay = 10.0
-    duration = _ask_calibration_duration(default=30.0)
 
     path, existing = _find_latest_loss_calibration()
     stages = dict(existing.get('stages', {}))
@@ -464,7 +473,8 @@ def calibrate_loss():
             path = Path(f"{st.DATA_DIR}/{datetime.datetime.now():%Y%m%d_%H%M%S}_loss_calibration.json")
         meta = {
             'stages': stages,
-            'duration_s': duration,
+            'record_n_bins': 20,
+            'record_bin_s': 5.0,
             'git_commit': _git_commit(),
             'saved_at': datetime.datetime.now().isoformat(),
         }
@@ -483,7 +493,7 @@ def calibrate_loss():
         ch0 = input("Detector channel the bare signal fiber landed on (default 2): ").strip()
         ch0 = int(ch0) if ch0 else 2
         delay0, row0 = _scan_and_record(ch0, absolute_range=(0.0, 20.0), step=1.0,
-                                         record_duration=duration, herald_delay=raw_herald_delay)
+                                         herald_delay=raw_herald_delay)
         print(f"Checking background (herald={raw_herald_delay:.0f}ns, ch @ peak+15ns)...")
         bg0, bg0_point = _measure_background(ch0, peak_delay=delay0, herald_delay=raw_herald_delay)
         return {'ch': ch0, 'delay_ns': delay0, 'counts': row0,
@@ -494,7 +504,7 @@ def calibrate_loss():
         input("\nPlug signal directly into the DUMP detector "
               "(herald stays connected), press Enter when ready...")
         delay0d, row0d = _scan_and_record(st.DUMP_CH, absolute_range=(0.0, 20.0), step=1.0,
-                                           record_duration=duration, herald_delay=raw_herald_delay)
+                                           herald_delay=raw_herald_delay)
         print(f"Checking background (herald={raw_herald_delay:.0f}ns, ch @ peak+15ns)...")
         bg0d, bg0d_point = _measure_background(st.DUMP_CH, peak_delay=delay0d, herald_delay=raw_herald_delay)
         return {'ch': st.DUMP_CH, 'delay_ns': delay0d, 'counts': row0d,
@@ -503,24 +513,21 @@ def calibrate_loss():
     def _run_ch2():
         input("\nPlug signal into the setup, press Enter when ready...")
         _set_bypass_optics()
-        delay2, row2 = _scan_and_record(2, center=st.CHANNELS[2]['delay'], span=3.0,
-                                         record_duration=duration)
+        delay2, row2 = _scan_and_record(2, center=st.CHANNELS[2]['delay'], span=3.0)
         return {'ch': 2, 'delay_ns': delay2, 'counts': row2}
 
     def _run_ch4():
         _set_loop_optics()
         input("\nOne-loop pass — no fiber changes needed. Set the switch control "
               "program to 'man set' for 1 loop, press Enter when ready...")
-        delay4, row4 = _scan_and_record(4, center=st.CHANNELS[4]['delay'], span=3.0,
-                                         record_duration=duration)
+        delay4, row4 = _scan_and_record(4, center=st.CHANNELS[4]['delay'], span=3.0)
         return {'ch': 4, 'delay_ns': delay4, 'counts': row4}
 
     def _run_dump():
         _set_loop_optics()
         input("\nSet the switch control program to 'man set', then set it to dump "
               "after 1 loop (dwell 60 ns), press Enter when ready...")
-        delay7, row7 = _scan_and_record(st.DUMP_CH, center=st.DUMP_DELAYS[1], span=3.0,
-                                         record_duration=duration)
+        delay7, row7 = _scan_and_record(st.DUMP_CH, center=st.DUMP_DELAYS[1], span=3.0)
         return {'ch': st.DUMP_CH, 'delay_ns': delay7, 'counts': row7}
 
     def _run_input():
@@ -539,8 +546,7 @@ def calibrate_loss():
             print(f"No prior delay on file — coarse-scanning down from the herald's "
                   f"{herald_delay_normal:.0f}ns delay to locate the peak...")
             prior = _coarse_scan(ch_in, start=herald_delay_normal, stop=0.0)
-        delay_in, row_in = _scan_and_record(ch_in, center=prior, span=10.0, step=1.0,
-                                             record_duration=duration)
+        delay_in, row_in = _scan_and_record(ch_in, center=prior, span=10.0, step=1.0)
         return {'ch': ch_in, 'delay_ns': delay_in, 'counts': row_in}
 
     stage_menu = [
@@ -576,25 +582,64 @@ def calibrate_loss():
         return _save()
 
     def rate(stage_key):
+        """(mean_rate_hz, sem_rate_hz) from a stage's per-bin coincidence
+        counts — SEM = std/sqrt(n_bins). Falls back to a single point
+        estimate with no error bar for older stages recorded before
+        per-bin counts existed."""
         s = stages[stage_key]
-        return s['counts'][f"coinc_ch{s['ch']}"] / s['counts']['int_time'] if s['counts']['int_time'] else 0.0
+        counts, ch = s['counts'], s['ch']
+        bins = counts.get(f"coinc_ch{ch}_bins")
+        if not bins:
+            total_rate = counts[f"coinc_ch{ch}"] / counts['int_time'] if counts['int_time'] else 0.0
+            return total_rate, 0.0
+        bin_s = counts['int_time'] / len(bins)
+        bin_rates = [c / bin_s for c in bins]
+        mean_rate = statistics.mean(bin_rates)
+        sem_rate = statistics.stdev(bin_rates) / len(bin_rates) ** 0.5 if len(bin_rates) > 1 else 0.0
+        return mean_rate, sem_rate
+
+    def combine(*terms):
+        """(value, err) for a product of terms**power (power=-1 for a
+        division) — relative errors combine in quadrature, valid for any
+        chain of independent multiplications/divisions. terms are
+        ((value, err), power) pairs, e.g. combine((C2, 1), (Cin, -1)) for
+        C2/Cin. None if any input value is zero/None (division by zero)."""
+        if any(not v for (v, _), _ in terms):
+            return None, None
+        result = 1.0
+        for (v, _), p in terms:
+            result *= v ** p
+        rel_sq = sum((p * e / v) ** 2 for (v, e), p in terms)
+        return result, abs(result) * rel_sq ** 0.5
+
     C0, C0d, C2, C4, Cd, Cin = (rate('source'), rate('source_dump'), rate('ch2'),
                                 rate('ch4'), rate('dump'), rate('input'))
-    rates = {'C0': C0, 'C0d': C0d, 'C2': C2, 'C4': C4, 'Cd': Cd, 'Cin': Cin}
+    rates = {
+        'C0': C0[0], 'C0_err': C0[1], 'C0d': C0d[0], 'C0d_err': C0d[1],
+        'C2': C2[0], 'C2_err': C2[1], 'C4': C4[0], 'C4_err': C4[1],
+        'Cd': Cd[0], 'Cd_err': Cd[1], 'Cin': Cin[0], 'Cin_err': Cin[1],
+    }
 
-    input_loss = C2 / Cin if Cin else None
-    det_eff_dump = C0d / C0 if C0 else None
+    det_eff_dump = combine((C0d, 1), (C0, -1))
+    input_loss = combine((C2, 1), (Cin, -1))
+    loss_per_loop_pass = combine((C4, 1), (C2, -1))
+    # Cd is on the dump detector, Cin isn't — normalise Cd to the setup
+    # detector's efficiency via det_eff_dump first, then divide by Cin.
+    # Diverts straight off the switch entrance, same as ch2 — never
+    # touches the loop-pass optics ch4 does — so this is
+    # loss_input_to_setup * loop-to-dump diversion loss, not per_loop_pass.
+    loss_to_dump = combine((Cd, 1), (Cin, -1), (det_eff_dump, -1))
     losses = {
-        'det_eff_setup':       1.0,
-        'det_eff_dump':        det_eff_dump,
-        'loss_input_to_setup': input_loss,
-        'loss_per_loop_pass':  C4 / C2 if C2 else None,
-        # Cd is on the dump detector, Cin isn't — normalise Cd to the setup
-        # detector's efficiency via det_eff_dump first, then divide by Cin.
-        # Diverts straight off the switch entrance, same as ch2 — never
-        # touches the loop-pass optics ch4 does — so this is
-        # loss_input_to_setup * loop-to-dump diversion loss, not per_loop_pass.
-        'loss_to_dump':        Cd / (Cin * det_eff_dump) if Cin and det_eff_dump else None,
+        'det_eff_setup':           1.0,
+        'det_eff_setup_err':       0.0,
+        'det_eff_dump':            det_eff_dump[0],
+        'det_eff_dump_err':        det_eff_dump[1],
+        'loss_input_to_setup':     input_loss[0],
+        'loss_input_to_setup_err': input_loss[1],
+        'loss_per_loop_pass':      loss_per_loop_pass[0],
+        'loss_per_loop_pass_err':  loss_per_loop_pass[1],
+        'loss_to_dump':            loss_to_dump[0],
+        'loss_to_dump_err':        loss_to_dump[1],
     }
     meta = _save(losses=losses, rates=rates)
     print(f"\nSaved -> {path}")
@@ -1117,8 +1162,8 @@ def main():
 
 if __name__ == "__main__":
     if SIM_MODE:
-        d, row = _scan_and_record(2, center=100.0, span=3.0, step=1.0, record_duration=1.0)
-        assert row['int_time'] == 1.0 and 'coinc_ch2' in row
+        d, row = _scan_and_record(2, center=100.0, span=3.0, step=1.0, n_bins=1, record_bin_s=1.0)
+        assert row['int_time'] == 1.0 and 'coinc_ch2' in row and row['coinc_ch2_bins'] == [0]
     try:
         main()
     except KeyboardInterrupt:
