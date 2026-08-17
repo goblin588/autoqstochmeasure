@@ -262,18 +262,15 @@ def _acquire_background(N, duration=None):
     return acquire_counts(duration, signal_chs=chs, delays=delays)
 
 
-def _run_background_calibration(duration):
-    """Background/accidental coincidence rate across every DET_CHS channel:
-    every channel's delay is bumped +st.BACKGROUND_OFFSET_NS ns off its
-    tuned value (herald left alone), so the coincidence window misses the
-    real photon arrival and only counts accidentals — no physical beam
-    blocking needed.
+def calibrate_background():
+    """Per-channel background/accidental coincidence rate: every channel's
+    delay is bumped +st.BACKGROUND_OFFSET_NS ns off its tuned value (herald
+    left alone), so the coincidence window misses the real photon arrival
+    and only counts accidentals — no physical beam blocking needed.
 
-    Just the acquire-and-compute step, no file write — factored out of
-    calibrate_background() so calibrate_loss() can run the same check
-    inline (embedded straight into its own JSON) without spawning a
-    separate *_noise_calibration.json every time.
+    Saves data/{timestamp}_noise_calibration.json.
     """
+    duration = _ask_calibration_duration()
     delays = delays_for()
     for ch in DET_CHS:
         delays[ch - 1] += st.BACKGROUND_OFFSET_NS
@@ -287,7 +284,8 @@ def _run_background_calibration(duration):
         str(ch): counts.get(f'coinc_ch{ch}', 0) / int_time
         for ch in DET_CHS
     }
-    return {
+
+    calibration = {
         'counts': counts,
         'offset_ns': st.BACKGROUND_OFFSET_NS,
         'background_rate_hz': background_rate_hz,
@@ -295,22 +293,12 @@ def _run_background_calibration(duration):
         'saved_at': datetime.datetime.now().isoformat(),
         'git_commit': _git_commit(),
     }
-
-
-def calibrate_background():
-    """Per-channel background/accidental coincidence rate — see
-    _run_background_calibration for the acquisition itself.
-
-    Saves data/{timestamp}_noise_calibration.json.
-    """
-    duration = _ask_calibration_duration()
-    calibration = _run_background_calibration(duration)
     os.makedirs(st.DATA_DIR, exist_ok=True)
     stem = f"{st.DATA_DIR}/{datetime.datetime.now():%Y%m%d_%H%M%S}_noise_calibration"
     with open(f"{stem}.json", 'w') as f:
         json.dump(calibration, f, indent=1)
     print(f"\nSaved calibration -> {stem}.json")
-    print(f"background_rate_hz: {calibration['background_rate_hz']}")
+    print(f"background_rate_hz: {background_rate_hz}")
     notify("Background calibration done", title="Calibration Complete")
     return calibration
 
@@ -407,12 +395,6 @@ def calibrate_loss():
       dump         one loop pass, switch diverts to the dump port/detector      -> C_dump
       input        signal after input prep, tapped right before the switch     -> C_in
 
-    A background/noise calibration (all DET_CHS, same acquisition as
-    calibrate_background) always runs first, unconditionally — no
-    dependency on whichever *_noise_calibration.json happens to already
-    exist — and is embedded directly as 'noise_calibration' in every save,
-    rather than spawning a fresh standalone calibration file each run.
-
     source/source_dump are both raw, setup-free baselines (herald+signal
     direct to a detector) — one through the output detector, one through the
     dump detector — since the two are physically different detectors and may
@@ -480,13 +462,6 @@ def calibrate_loss():
     # and the background check pin herald to this instead.
     raw_herald_delay = 10.0
 
-    # Always run a fresh noise calibration and embed it directly below,
-    # rather than pointing at whichever *_noise_calibration.json happens to
-    # be on file (which can be stale) or spawning yet another standalone
-    # calibration file every time this runs.
-    print("Running background/noise calibration (all channels, embedded below)...")
-    noise_calibration = _run_background_calibration(100.0)
-
     path, existing = _find_latest_loss_calibration()
     stages = dict(existing.get('stages', {}))
     if stages:
@@ -501,7 +476,6 @@ def calibrate_loss():
             'stages': stages,
             'record_n_bins': 20,
             'record_bin_s': 5.0,
-            'noise_calibration': noise_calibration,
             'git_commit': _git_commit(),
             'saved_at': datetime.datetime.now().isoformat(),
         }
