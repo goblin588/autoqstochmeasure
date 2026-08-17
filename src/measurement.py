@@ -308,8 +308,9 @@ def _scan_and_record(ch, **kwargs):
     as _acquire_counts_all."""
     if SIM_MODE:
         n_bins = kwargs.get('n_bins', 20)
-        row = _sim_row(kwargs.get('record_bin_s', 5.0) * n_bins, [ch])
-        row[f'coinc_ch{ch}_bins'] = [0] * n_bins
+        bin_s = kwargs.get('record_bin_s', 5.0)
+        row = _sim_row(bin_s * n_bins, [ch])
+        row['bins'] = [_sim_row(bin_s, [ch]) for _ in range(n_bins)]
         return kwargs.get('center', 0.0), row
     from libraries.countingcard import scan_and_record
     return scan_and_record(ch, **kwargs)
@@ -588,12 +589,11 @@ def calibrate_loss():
         per-bin counts existed."""
         s = stages[stage_key]
         counts, ch = s['counts'], s['ch']
-        bins = counts.get(f"coinc_ch{ch}_bins")
+        bins = counts.get('bins')
         if not bins:
             total_rate = counts[f"coinc_ch{ch}"] / counts['int_time'] if counts['int_time'] else 0.0
             return total_rate, 0.0
-        bin_s = counts['int_time'] / len(bins)
-        bin_rates = [c / bin_s for c in bins]
+        bin_rates = [b[f"coinc_ch{ch}"] / b['int_time'] for b in bins if b['int_time']]
         mean_rate = statistics.mean(bin_rates)
         sem_rate = statistics.stdev(bin_rates) / len(bin_rates) ** 0.5 if len(bin_rates) > 1 else 0.0
         return mean_rate, sem_rate
@@ -1163,7 +1163,8 @@ def main():
 if __name__ == "__main__":
     if SIM_MODE:
         d, row = _scan_and_record(2, center=100.0, span=3.0, step=1.0, n_bins=1, record_bin_s=1.0)
-        assert row['int_time'] == 1.0 and 'coinc_ch2' in row and row['coinc_ch2_bins'] == [0]
+        assert row['int_time'] == 1.0 and 'coinc_ch2' in row
+        assert len(row['bins']) == 1 and row['bins'][0]['coinc_ch2'] == 0
     try:
         main()
     except KeyboardInterrupt:
