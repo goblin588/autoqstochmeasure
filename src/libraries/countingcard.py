@@ -35,6 +35,55 @@ def acquire_counts(
     return row
 
 
+def acquire_counts_binned(
+    n_bins: int = 20,
+    bin_s: float = 5.0,
+    herald_ch: int = TRIGG_CH,
+    signal_chs: list = DET_CHS,
+    coincidence_window: float = COINCIDENCE_WINDOW,
+    delays: list = DELAYS,
+):
+    """Same shape as acquire_counts, but `n_bins` reads of `bin_s` seconds
+    each (default 20 x 5s = 100s total) instead of one long blocking read —
+    every bin's full raw read is kept (row['bins']), same convention as
+    scan_and_record's final recording, so callers can report mean +/- SEM
+    per channel instead of a single point estimate. Prints a running total
+    per bin and a Ctrl-C keeps whatever bins were already collected.
+
+    Returns row: acquire_counts()'s dict shape (totals summed across bins)
+    plus row['bins'], a list of n_bins per-bin dicts of that same shape.
+    """
+    with Logic16(coincidence_window=coincidence_window, logic_mode=True,
+                 integration_window=bin_s) as logic:
+        logic.configure(threshold=THRESHOLDS, coincidence_window=coincidence_window, delays=delays)
+        bins = []
+        try:
+            for i in range(n_bins):
+                c_counts, s_counts, t = logic.read_counts_integrated(
+                    pos_singles=[herald_ch, *signal_chs],
+                    pos_coincidence=[[herald_ch, ch] for ch in signal_chs],
+                )
+                bin_row = {'herald': int(s_counts[0])}
+                for j, ch in enumerate(signal_chs):
+                    bin_row[f'singles_ch{ch}'] = int(s_counts[j + 1])
+                    bin_row[f'coinc_ch{ch}'] = int(c_counts[j])
+                bin_row['int_time'] = t
+                bins.append(bin_row)
+                total = sum(b[f'coinc_ch{signal_chs[0]}'] for b in bins)
+                print(f"    [{i + 1}/{n_bins}] +{t:.1f}s — ch{signal_chs[0]} {total:.0f} coinc so far")
+        except KeyboardInterrupt:
+            print(f"  recording interrupted after {len(bins)}/{n_bins} bins — "
+                  f"keeping what was collected")
+
+    row = {'herald': sum(b['herald'] for b in bins)}
+    for ch in signal_chs:
+        row[f'singles_ch{ch}'] = sum(b[f'singles_ch{ch}'] for b in bins)
+        row[f'coinc_ch{ch}'] = sum(b[f'coinc_ch{ch}'] for b in bins)
+    row['int_time'] = sum(b['int_time'] for b in bins)
+    row['bins'] = bins
+    return row
+
+
 def acquire_rows(
     total: float | None = None,
     integration: float = 1.0,
