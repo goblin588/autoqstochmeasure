@@ -155,10 +155,12 @@ def _save_results(rows, N, label, background=None):
     accidental-coincidence floor rather than relying only on the separate
     noise_calibration pointer.
 
-    loss_calibration is a pointer to the most recent data/*_loss_calibration.json
-    (same file/saved_at shape as noise_calibration), plus its computed
-    losses dict inlined directly — small enough to just carry along rather
-    than making every reader resolve a second file.
+    loss_calibration carries the losses and coincidence_rates_hz from the
+    most recent data/*_loss_calibration.json inlined directly (plus a
+    file/saved_at pointer to it, same shape as noise_calibration) — a
+    frozen snapshot taken at save time, not a live reference, so rerunning
+    calibrate_loss() later can't retroactively change what an already-saved
+    measurement recorded.
 
     Timestamp leads so filenames sort most-recent-last (ls default order).
     Called from finally — saves whatever rows exist even mid-sweep.
@@ -197,7 +199,8 @@ def _save_results(rows, N, label, background=None):
         'background_offset_ns': st.MEASUREMENT_BG_OFFSET_NS,
         'background': background,
         'loss_calibration': ({'file': loss_cal_path.name, 'saved_at': loss_cal.get('saved_at'),
-                              'losses': loss_cal.get('losses')}
+                              'losses': loss_cal.get('losses'),
+                              'coincidence_rates_hz': loss_cal.get('coincidence_rates_hz')}
                              if loss_cal_path else None),
     }
     with open(f"{stem}.json", 'w') as f:
