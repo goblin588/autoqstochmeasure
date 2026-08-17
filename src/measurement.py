@@ -245,21 +245,28 @@ def _acquire_counts_all(duration, delays=None):
                            delays=delays if delays is not None else delays_for())
 
 
-def _acquire_background(N, duration=None):
+def _acquire_background(N):
     """Quick background/accidental-coincidence check for N's channels, run
     automatically at the start of measurement() — every channel's delay
     bumped +MEASUREMENT_BG_OFFSET_NS ns off its tuned value (herald left
     alone), same convention as calibrate_background, so the coincidence
-    window misses the real photon and counts only accidentals."""
+    window misses the real photon and counts only accidentals.
+
+    MEASUREMENT_BG_N_BINS x MEASUREMENT_BG_BIN_S (20 x 5s) bins, same
+    convention as calibrate_loss's recordings — row['bins'] holds the full
+    per-bin data so mean +/- SEM can be reported per channel, not just a
+    single point estimate."""
     chs = st.det_chs_for(N)
-    duration = duration if duration is not None else st.MEASUREMENT_BG_DURATION_S
+    n_bins, bin_s = st.MEASUREMENT_BG_N_BINS, st.MEASUREMENT_BG_BIN_S
     if SIM_MODE:
-        return _sim_row(duration, chs)
-    from libraries.countingcard import acquire_counts
+        row = _sim_row(bin_s * n_bins, chs)
+        row['bins'] = [_sim_row(bin_s, chs) for _ in range(n_bins)]
+        return row
+    from libraries.countingcard import acquire_counts_binned
     delays = delays_for()
     for ch in chs:
         delays[ch - 1] += st.MEASUREMENT_BG_OFFSET_NS
-    return acquire_counts(duration, signal_chs=chs, delays=delays)
+    return acquire_counts_binned(n_bins=n_bins, bin_s=bin_s, signal_chs=chs, delays=delays)
 
 
 def calibrate_background():
@@ -736,9 +743,10 @@ def measurement(N, performTomo=False, js=None):
 
     Before the run starts, a quick _acquire_background(N) check (delays
     bumped +MEASUREMENT_BG_OFFSET_NS ns off tuned, same convention as
-    calibrate_background) is saved into the sidecar JSON alongside the
-    rows — one accidental-coincidence reading per run, not just a pointer
-    to whichever separate noise_calibration happened to be most recent.
+    calibrate_background; 20 x 5s bins, same as calibrate_loss's
+    recordings) is saved into the sidecar JSON alongside the rows — one
+    accidental-coincidence reading per run, not just a pointer to whichever
+    separate noise_calibration happened to be most recent.
 
     Returns the list of result rows so callers can aggregate.
     """
@@ -758,7 +766,7 @@ def measurement(N, performTomo=False, js=None):
             break
 
     print(f"Measuring background (+{st.MEASUREMENT_BG_OFFSET_NS:.0f}ns off tuned delays, "
-          f"{st.MEASUREMENT_BG_DURATION_S:.0f}s)...")
+          f"{st.MEASUREMENT_BG_N_BINS} x {st.MEASUREMENT_BG_BIN_S:.0f}s bins)...")
     background = _acquire_background(N)
     print(f"  {background}")
 

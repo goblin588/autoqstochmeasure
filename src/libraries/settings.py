@@ -129,9 +129,11 @@ BACKGROUND_OFFSET_NS = 15.0  # off a channel's tuned delay = misses the real pho
 # Quick background check run automatically at the start of every measurement()
 # call (distinct from BACKGROUND_OFFSET_NS/calibrate_background, which is a
 # separate deliberate calibration step) — offset is bigger since 15ns can
-# still catch the tail of a slow channel's peak.
+# still catch the tail of a slow channel's peak. Same 20 x 5s binning as
+# calibrate_loss's recordings, so it reports mean +/- SEM too.
 MEASUREMENT_BG_OFFSET_NS = 20.0
-MEASUREMENT_BG_DURATION_S = 10.0
+MEASUREMENT_BG_N_BINS = 20
+MEASUREMENT_BG_BIN_S = 5.0
 
 # tune_delays' per-channel integration time (s): later loops lose more photons,
 # so their coincidence peak needs longer collection to clear the noise floor.
