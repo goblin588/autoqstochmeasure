@@ -156,12 +156,14 @@ def _save_results(rows, N, label, background=None):
     accidental-coincidence floor rather than relying only on the separate
     noise_calibration pointer.
 
-    loss_calibration carries the losses and coincidence_rates_hz from the
-    most recent data/*_loss_calibration.json inlined directly (plus a
-    file/saved_at pointer to it, same shape as noise_calibration) — a
-    frozen snapshot taken at save time, not a live reference, so rerunning
-    calibrate_loss() later can't retroactively change what an already-saved
-    measurement recorded.
+    noise_calibration and loss_calibration are the *entire* contents of the
+    most recent data/*_noise_calibration.json and *_loss_calibration.json
+    (plus a 'file' key naming which one), copied in wholesale rather than
+    cherry-picked — the point is that a measurement's own .csv + .json pair
+    is self-contained for plotting/analysis, no need to separately resolve
+    and open either calibration file. A frozen snapshot taken at save time,
+    not a live reference, so rerunning either calibration later can't
+    retroactively change what an already-saved measurement recorded.
 
     Timestamp leads so filenames sort most-recent-last (ls default order).
     Called from finally — saves whatever rows exist even mid-sweep.
@@ -178,7 +180,16 @@ def _save_results(rows, N, label, background=None):
         writer.writerows(rows)
 
     calibration = _latest_calibration()
+    noise_calibration = None
+    if calibration:
+        noise_calibration = json.loads(calibration.read_text())
+        noise_calibration['file'] = calibration.name
+
     loss_cal_path, loss_cal = _find_latest_loss_calibration()
+    loss_calibration = None
+    if loss_cal_path:
+        loss_calibration = {**loss_cal, 'file': loss_cal_path.name}
+
     meta = {
         'N': N,
         'label': label,
@@ -193,16 +204,10 @@ def _save_results(rows, N, label, background=None):
         'sim_mode': SIM_MODE,
         'git_commit': _git_commit(),
         'saved_at': datetime.datetime.now().isoformat(),
-        # filename only (not a full path) so this stays valid whichever
-        # clone/checkout the data/ directory ends up analysed from
-        'noise_calibration': ({'file': calibration.name, 'saved_at': _calibration_date(calibration)}
-                              if calibration else None),
+        'noise_calibration': noise_calibration,
         'background_offset_ns': st.MEASUREMENT_BG_OFFSET_NS,
         'background': background,
-        'loss_calibration': ({'file': loss_cal_path.name, 'saved_at': loss_cal.get('saved_at'),
-                              'losses': loss_cal.get('losses'),
-                              'coincidence_rates_hz': loss_cal.get('coincidence_rates_hz')}
-                             if loss_cal_path else None),
+        'loss_calibration': loss_calibration,
     }
     with open(f"{stem}.json", 'w') as f:
         json.dump(meta, f, indent=1)
@@ -371,8 +376,7 @@ def _set_bypass_optics():
     stage was skipped via resume."""
     _set_input_basis('H')
     _zero_path2_plates()
-    input("Manually set H2 to 45° and the switch control program to 'man set', "
-          "press Enter when ready...")
+    input("Manually set H2 to 45° and switch dwell to 120 ns, press Enter when ready...")
 
 
 def _set_loop_optics():
@@ -526,15 +530,15 @@ def calibrate_loss():
 
     def _run_ch4():
         _set_loop_optics()
-        input("\nOne-loop pass — no fiber changes needed. Set the switch control "
-              "program to 'man set' for 1 loop, press Enter when ready...")
+        input("\nOne-loop pass — no fiber changes needed. Set switch dwell to 120 ns "
+              "for 1 loop, press Enter when ready...")
         delay4, row4 = _scan_and_record(4, center=st.CHANNELS[4]['delay'], span=3.0)
         return {'ch': 4, 'delay_ns': delay4, 'counts': row4}
 
     def _run_dump():
         _set_loop_optics()
-        input("\nSet the switch control program to 'man set', then set it to dump "
-              "after 1 loop (dwell 60 ns), press Enter when ready...")
+        input("\nSet the switch to dump after 1 loop, dwell 60 ns, "
+              "press Enter when ready...")
         delay7, row7 = _scan_and_record(st.DUMP_CH, center=st.DUMP_DELAYS[1], span=3.0)
         return {'ch': st.DUMP_CH, 'delay_ns': delay7, 'counts': row7}
 
