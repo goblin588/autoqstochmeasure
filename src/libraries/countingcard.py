@@ -376,8 +376,8 @@ def scan_and_record(
     step: float = 0.5,
     absolute_range: tuple | None = None,   # e.g. (0.0, 20.0) for a cold scan with no prior delay
     scan_integration: float = 2.0,
-    record_duration: float = 60.0,
-    record_bin_s: float | None = 5.0,
+    n_bins: int = 20,
+    record_bin_s: float = 5.0,
     herald_ch: int = TRIGG_CH,
     herald_delay: float | None = None,
     max_resweeps: int = 3,
@@ -406,14 +406,18 @@ def scan_and_record(
     Opens one Logic16 context for the scan(s) and the final recording —
     mirrors tune_delays, never reopens the card per point.
 
-    The final recording is taken in `record_bin_s`-sized chunks (summed
-    into one row) rather than one long blocking read — this prints
-    progress as it goes and, like tune_delays, lets a Ctrl-C keep whatever
-    was collected so far instead of losing the whole recording. Pass
-    record_bin_s=None for the old single-shot behaviour.
+    The final recording is `n_bins` reads of `record_bin_s` seconds each
+    (default 20 x 5s = 100s total) rather than one long blocking read —
+    each bin's coincidence count is kept (row[f'coinc_ch{ch}_bins']) so a
+    caller can report mean +/- SEM (std/sqrt(n_bins)) instead of a single
+    point estimate. Prints a running total per bin and, like tune_delays,
+    lets a Ctrl-C keep whatever bins were already collected instead of
+    losing the whole recording.
 
-    Returns (best_delay, row) where row has acquire_counts()'s dict shape:
-    {'herald', 'singles_ch{ch}', 'coinc_ch{ch}', 'int_time'}.
+    Returns (best_delay, row) where row has acquire_counts()'s dict shape
+    plus f'coinc_ch{ch}_bins' (list of per-bin coincidence counts, one
+    entry per completed record_bin_s read):
+    {'herald', 'singles_ch{ch}', 'coinc_ch{ch}', 'int_time', 'coinc_ch{ch}_bins'}.
     """
     import libraries.settings as st
     offsets = (np.arange(absolute_range[0], absolute_range[1] + step / 2, step)
@@ -449,36 +453,32 @@ def scan_and_record(
 
         delays[ch - 1] = best_delay
         logic.set_delays(delays)
+        logic.set_integration_window(record_bin_s)
 
-        if record_bin_s is None:
-            print(f"  best: {best_delay:+.2f} ns ({best_counts:.0f} coinc) — "
-                  f"recording {record_duration:.0f}s...")
-            logic.set_integration_window(record_duration)
-            c, s, int_time = logic.read_counts_integrated(
-                pos_singles=[herald_ch, ch], pos_coincidence=[[herald_ch, ch]])
-            herald_total, ch_total, coinc_total = s[0], s[1], c[0]
-        else:
-            print(f"  best: {best_delay:+.2f} ns ({best_counts:.0f} coinc) — "
-                  f"recording {record_duration:.0f}s in {record_bin_s:.0f}s bins...")
-            herald_total = ch_total = coinc_total = 0
-            int_time = 0.0
-            try:
-                while int_time < record_duration:
-                    logic.set_integration_window(min(record_bin_s, record_duration - int_time))
-                    c, s, t = logic.read_counts_integrated(
-                        pos_singles=[herald_ch, ch], pos_coincidence=[[herald_ch, ch]])
-                    herald_total += s[0]
-                    ch_total += s[1]
-                    coinc_total += c[0]
-                    int_time += t
-                    rate = c[0] / t if t > 0 else 0.0
-                    print(f"    +{t:.1f}s: {c[0]:.0f} coinc ({rate:6.1f} Hz) — "
-                          f"{int_time:.0f}/{record_duration:.0f}s total, {coinc_total:.0f} coinc so far")
-            except KeyboardInterrupt:
-                print(f"  recording interrupted after {int_time:.0f}s — keeping what was collected")
+        print(f"  best: {best_delay:+.2f} ns ({best_counts:.0f} coinc) — "
+              f"recording {n_bins} x {record_bin_s:.0f}s bins...")
+        herald_total = ch_total = coinc_total = 0
+        int_time = 0.0
+        coinc_bins = []
+        try:
+            for i in range(n_bins):
+                c, s, t = logic.read_counts_integrated(
+                    pos_singles=[herald_ch, ch], pos_coincidence=[[herald_ch, ch]])
+                herald_total += s[0]
+                ch_total += s[1]
+                coinc_total += c[0]
+                int_time += t
+                coinc_bins.append(int(c[0]))
+                rate = c[0] / t if t > 0 else 0.0
+                print(f"    [{i + 1}/{n_bins}] +{t:.1f}s: {c[0]:.0f} coinc ({rate:6.1f} Hz) — "
+                      f"{coinc_total:.0f} coinc so far")
+        except KeyboardInterrupt:
+            print(f"  recording interrupted after {len(coinc_bins)}/{n_bins} bins — "
+                  f"keeping what was collected")
 
     row = {'herald': int(herald_total), f'singles_ch{ch}': int(ch_total),
-           f'coinc_ch{ch}': int(coinc_total), 'int_time': int_time}
+           f'coinc_ch{ch}': int(coinc_total), 'int_time': int_time,
+           f'coinc_ch{ch}_bins': coinc_bins}
     return best_delay, row
 
 
@@ -488,22 +488,28 @@ def measure_background(
     herald_ch: int = TRIGG_CH,
     herald_delay: float = 10.0,
     offset: float = BACKGROUND_OFFSET_NS,
-    integration: float = 2.0,
+    n_bins: int = 20,
+    bin_s: float = 5.0,
 ):
     """Accidental-coincidence floor for a raw (no-setup) baseline channel:
-    one read at `peak_delay + offset` (default +15ns — same
-    BACKGROUND_OFFSET_NS convention as calibrate_background/tune_delays),
-    far enough off the real coincidence peak found by scan_and_record to
-    miss it and count only accidentals. Not a scan — a single point.
+    `n_bins` reads of `bin_s` seconds each (default 20 x 5s = 100s) at
+    `peak_delay + offset` (default +15ns — same BACKGROUND_OFFSET_NS
+    convention as calibrate_background/tune_delays), far enough off the
+    real coincidence peak found by scan_and_record to miss it and count
+    only accidentals.
 
     herald pinned to `herald_delay`, matching the value scan_and_record used
     to find `peak_delay` in the first place (this ad hoc, no-setup
     connection doesn't use the setup's normal calibrated herald delay).
 
-    Returns (rate_hz, point) — point is the raw single-point record so it
-    can be reprocessed independently later:
-    {'offset_ns', 'delay_ns', 'coinc', 'herald_singles', 'ch_singles',
-     'int_time', 'rate_hz'}.
+    Same binning as scan_and_record's final recording: prints a running
+    total per bin, and a Ctrl-C keeps whatever bins were already collected.
+
+    Returns (rate_hz, point) — rate_hz is the mean across bins; point also
+    carries rate_sem_hz (SEM = std/sqrt(n_bins)) and coinc_bins (per-bin
+    raw counts, so it can be reprocessed independently later):
+    {'offset_ns', 'delay_ns', 'coinc', 'coinc_bins', 'herald_singles',
+     'ch_singles', 'int_time', 'rate_hz', 'rate_sem_hz'}.
     """
     import libraries.settings as st
     delays = st.delays_for()
@@ -511,18 +517,35 @@ def measure_background(
     bg_delay = peak_delay + offset
     delays[ch - 1] = bg_delay
     with Logic16(coincidence_window=COINCIDENCE_WINDOW, logic_mode=True,
-                 integration_window=integration) as logic:
+                 integration_window=bin_s) as logic:
         logic.configure(threshold=THRESHOLDS, coincidence_window=COINCIDENCE_WINDOW)
         logic.set_delays(delays)
-        c, s, t = logic.read_counts_integrated(
-            pos_singles=[herald_ch, ch], pos_coincidence=[[herald_ch, ch]])
+        herald_total = ch_total = coinc_total = 0
+        int_time = 0.0
+        coinc_bins = []
+        try:
+            for i in range(n_bins):
+                c, s, t = logic.read_counts_integrated(
+                    pos_singles=[herald_ch, ch], pos_coincidence=[[herald_ch, ch]])
+                herald_total += s[0]
+                ch_total += s[1]
+                coinc_total += c[0]
+                int_time += t
+                coinc_bins.append(int(c[0]))
+                print(f"    [{i + 1}/{n_bins}] background +{t:.1f}s: {c[0]:.0f} coinc — "
+                      f"{coinc_total:.0f} coinc so far")
+        except KeyboardInterrupt:
+            print(f"  background recording interrupted after {len(coinc_bins)}/{n_bins} bins — "
+                  f"keeping what was collected")
 
-    rate = c[0] / t if t > 0 else 0.0
+    rate = coinc_total / int_time if int_time > 0 else 0.0
+    rate_sem = (np.std(coinc_bins, ddof=1) / bin_s) / len(coinc_bins) ** 0.5 if len(coinc_bins) > 1 else 0.0
     print(f"  background @ {bg_delay:+.1f} ns (peak {peak_delay:+.1f} + {offset:.0f}): "
-          f"{c[0]:.0f} coinc ({rate:.1f} Hz)")
-    point = {'offset_ns': offset, 'delay_ns': bg_delay, 'coinc': int(c[0]),
-             'herald_singles': int(s[0]), 'ch_singles': int(s[1]),
-             'int_time': t, 'rate_hz': rate}
+          f"{coinc_total:.0f} coinc over {len(coinc_bins)} bins ({rate:.2f} +/- {rate_sem:.2f} Hz)")
+    point = {'offset_ns': offset, 'delay_ns': bg_delay, 'coinc': int(coinc_total),
+             'coinc_bins': coinc_bins, 'herald_singles': int(herald_total),
+             'ch_singles': int(ch_total), 'int_time': int_time,
+             'rate_hz': rate, 'rate_sem_hz': rate_sem}
     return rate, point
 
 
