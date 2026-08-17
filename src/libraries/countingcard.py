@@ -377,6 +377,7 @@ def scan_and_record(
     absolute_range: tuple | None = None,   # e.g. (0.0, 20.0) for a cold scan with no prior delay
     scan_integration: float = 2.0,
     record_duration: float = 60.0,
+    record_bin_s: float | None = 5.0,
     herald_ch: int = TRIGG_CH,
     herald_delay: float | None = None,
     max_resweeps: int = 3,
@@ -404,6 +405,12 @@ def scan_and_record(
 
     Opens one Logic16 context for the scan(s) and the final recording —
     mirrors tune_delays, never reopens the card per point.
+
+    The final recording is taken in `record_bin_s`-sized chunks (summed
+    into one row) rather than one long blocking read — this prints
+    progress as it goes and, like tune_delays, lets a Ctrl-C keep whatever
+    was collected so far instead of losing the whole recording. Pass
+    record_bin_s=None for the old single-shot behaviour.
 
     Returns (best_delay, row) where row has acquire_counts()'s dict shape:
     {'herald', 'singles_ch{ch}', 'coinc_ch{ch}', 'int_time'}.
@@ -440,16 +447,38 @@ def scan_and_record(
                   f"resweeping centred there...")
             offsets = best_delay + np.arange(-span, span + step / 2, step)
 
-        print(f"  best: {best_delay:+.2f} ns ({best_counts:.0f} coinc) — "
-              f"recording {record_duration:.0f}s...")
         delays[ch - 1] = best_delay
         logic.set_delays(delays)
-        logic.set_integration_window(record_duration)
-        c, s, int_time = logic.read_counts_integrated(
-            pos_singles=[herald_ch, ch], pos_coincidence=[[herald_ch, ch]])
 
-    row = {'herald': int(s[0]), f'singles_ch{ch}': int(s[1]),
-           f'coinc_ch{ch}': int(c[0]), 'int_time': int_time}
+        if record_bin_s is None:
+            print(f"  best: {best_delay:+.2f} ns ({best_counts:.0f} coinc) — "
+                  f"recording {record_duration:.0f}s...")
+            logic.set_integration_window(record_duration)
+            c, s, int_time = logic.read_counts_integrated(
+                pos_singles=[herald_ch, ch], pos_coincidence=[[herald_ch, ch]])
+            herald_total, ch_total, coinc_total = s[0], s[1], c[0]
+        else:
+            print(f"  best: {best_delay:+.2f} ns ({best_counts:.0f} coinc) — "
+                  f"recording {record_duration:.0f}s in {record_bin_s:.0f}s bins...")
+            herald_total = ch_total = coinc_total = 0
+            int_time = 0.0
+            try:
+                while int_time < record_duration:
+                    logic.set_integration_window(min(record_bin_s, record_duration - int_time))
+                    c, s, t = logic.read_counts_integrated(
+                        pos_singles=[herald_ch, ch], pos_coincidence=[[herald_ch, ch]])
+                    herald_total += s[0]
+                    ch_total += s[1]
+                    coinc_total += c[0]
+                    int_time += t
+                    rate = c[0] / t if t > 0 else 0.0
+                    print(f"    +{t:.1f}s: {c[0]:.0f} coinc ({rate:6.1f} Hz) — "
+                          f"{int_time:.0f}/{record_duration:.0f}s total, {coinc_total:.0f} coinc so far")
+            except KeyboardInterrupt:
+                print(f"  recording interrupted after {int_time:.0f}s — keeping what was collected")
+
+    row = {'herald': int(herald_total), f'singles_ch{ch}': int(ch_total),
+           f'coinc_ch{ch}': int(coinc_total), 'int_time': int_time}
     return best_delay, row
 
 
