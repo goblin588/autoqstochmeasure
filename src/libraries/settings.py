@@ -38,11 +38,11 @@ WAVEPLATES = {
     'HWP_TOM_DUMP': {'stage': 11, 'oa': 35.5},
     'QWP_TOM_DUMP': {'stage': 13, 'oa': 73},
     # Interferometer plates (realise the h1/q1/h2/q2 angles in getUnitary,
-    # previously fixed/manual, now motorised). OA not yet characterised.
-    'HWP_1':        {'stage': 17, 'oa': 0},
-    'QWP_1':        {'stage': 10, 'oa': 0},
-    'HWP_12':       {'stage': 18, 'oa': 0},
-    'QWP_12':       {'stage': 9,  'oa': 0},
+    # previously fixed/manual, now motorised).
+    'HWP_1':        {'stage': 17, 'oa': 84.31},
+    'QWP_1':        {'stage': 10, 'oa': 353.3},
+    'HWP_12':       {'stage': 18, 'oa': 16.28},
+    'QWP_12':       {'stage': 9,  'oa': 170.63},
 }
 
 # Bind each entry as a module-level Waveplate (HWP_IN, QWP_IN, ...) so
