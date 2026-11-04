@@ -26,7 +26,8 @@ from libraries.settings import HWP_IN, QWP_IN, COMPORT, SIM_MODE
 from libraries.waveplate_angles import unitaries_angles
 from libraries.settings import (HWP_IN, QWP_IN, QWP_TOM_DUMP, HWP_TOM_DUMP,
                                 HWP_IN_2, QWP_IN_2, HWP_OUT_2, QWP_OUT_2,
-                                HWP_TOM_1, QWP_TOM_1, COMPORT, SIM_MODE,
+                                HWP_TOM_1, QWP_TOM_1, HWP_1, QWP_1, HWP_12, QWP_12,
+                                COMPORT, SIM_MODE,
                                 DET_CHS, LOOP_CHS, DUMP_CH, TRIGG_CH, delays_for,
                                 ANTILATCH_HOST, ANTILATCH_PORT)
 from libraries.notifier import notify
@@ -45,6 +46,10 @@ def _set_fixed_waveplates(angles, path=None):
         ('qf2',  'QWP_OUT_2', QWP_OUT_2),
         ('hf1',  'HWP_TOM_1', HWP_TOM_1),
         ('qf1',  'QWP_TOM_1', QWP_TOM_1),
+        ('h1',   'HWP_1',     HWP_1),
+        ('q1',   'QWP_1',     QWP_1),
+        ('h2',   'HWP_12',    HWP_12),
+        ('q2',   'QWP_12',    QWP_12),
     ]
     skip = {1: ('hf1', 'qf1'), 2: ('hf2', 'qf2')}.get(path, ())
     for key, name, stage in plates:
@@ -134,6 +139,34 @@ def _acquire_rows(N, total):
     from libraries.countingcard import acquire_rows
     yield from acquire_rows(total, integration=integration, signal_chs=chs, delays=delays_for())
 
+def _bin_rate_mean_std(counts, ch):
+    """(mean_hz, std_hz) of ch's coincidence rate across counts['bins'].
+    Falls back to a single point estimate with no spread for counts
+    recorded before per-bin data existed."""
+    bins = counts.get('bins')
+    if not bins:
+        total_rate = counts[f"coinc_ch{ch}"] / counts['int_time'] if counts['int_time'] else 0.0
+        return total_rate, 0.0
+    bin_rates = [b[f"coinc_ch{ch}"] / b['int_time'] for b in bins if b['int_time']]
+    mean_rate = statistics.mean(bin_rates)
+    std_rate = statistics.stdev(bin_rates) if len(bin_rates) > 1 else 0.0
+    return mean_rate, std_rate
+
+
+# Descriptive labels for calibrate_loss's 6 stage keys, used wherever a
+# stage summary is shown to a human or embedded in a measurement's JSON —
+# the raw keys (ch2/ch4/dump/input) read as unlabelled channel numbers.
+LOSS_STAGE_LABELS = {
+    'source':           'source_output',
+    'source_dump':      'source_dump_output',
+    'ch2':              'zero_loop_output',
+    'ch4':              'one_loop',
+    'dump':             'one_loop_dump',
+    'straight_to_dump': 'zero_loop_dump',
+    'input':            'input_counts',
+}
+
+
 def _git_commit():
     """Best-effort short git commit hash of the running code, for
     reproducibility. None if git isn't available (e.g. not a checkout)."""
@@ -156,14 +189,18 @@ def _save_results(rows, N, label, background=None):
     accidental-coincidence floor rather than relying only on the separate
     noise_calibration pointer.
 
-    noise_calibration and loss_calibration are the *entire* contents of the
-    most recent data/*_noise_calibration.json and *_loss_calibration.json
-    (plus a 'file' key naming which one), copied in wholesale rather than
-    cherry-picked — the point is that a measurement's own .csv + .json pair
-    is self-contained for plotting/analysis, no need to separately resolve
-    and open either calibration file. A frozen snapshot taken at save time,
-    not a live reference, so rerunning either calibration later can't
-    retroactively change what an already-saved measurement recorded.
+    noise_calibration is the *entire* contents of the most recent
+    data/*_noise_calibration.json (plus a 'file' key naming it), copied in
+    wholesale — the point is that a measurement's own .csv + .json pair is
+    self-contained for plotting/analysis, no need to separately resolve and
+    open the calibration file. A frozen snapshot taken at save time, not a
+    live reference, so rerunning the calibration later can't retroactively
+    change what an already-saved measurement recorded.
+
+    loss_calibration is reduced to just each of the 7 stages' {mean_hz,
+    std_hz} under descriptive labels (LOSS_STAGE_LABELS), plus 'file' —
+    the raw per-bin recordings and derived losses stay in calibrate_loss's
+    own file; a measurement's JSON only needs the summary.
 
     Timestamp leads so filenames sort most-recent-last (ls default order).
     Called from finally — saves whatever rows exist even mid-sweep.
@@ -188,7 +225,12 @@ def _save_results(rows, N, label, background=None):
     loss_cal_path, loss_cal = _find_latest_loss_calibration()
     loss_calibration = None
     if loss_cal_path:
-        loss_calibration = {**loss_cal, 'file': loss_cal_path.name}
+        stages = {
+            LOSS_STAGE_LABELS[key]: dict(zip(('mean_hz', 'std_hz'),
+                                              _bin_rate_mean_std(stage['counts'], stage['ch'])))
+            for key, stage in loss_cal.get('stages', {}).items()
+        }
+        loss_calibration = {'file': loss_cal_path.name, 'stages': stages}
 
     meta = {
         'N': N,
@@ -398,12 +440,13 @@ def _set_loop_optics():
 
 
 def calibrate_loss():
-    """Menu-driven loss calibration over 6 stages:
+    """Menu-driven loss calibration over 7 stages:
       source       source baseline, signal straight to the output detector      -> C0
       source_dump  source baseline, signal straight to the DUMP detector        -> C0_dump
       ch2          zero-loop bypass, signal into setup, exits without looping   -> C_ch2
       ch4          one loop pass, exits via the normal loop-output port         -> C_ch4
       dump         one loop pass, switch diverts to the dump port/detector      -> C_dump
+      straight_to_dump  zero loop, switch set to 'man' straight to dump port   -> C_sdump
       input        signal after input prep, tapped right before the switch     -> C_in
 
     source/source_dump are both raw, setup-free baselines (herald+signal
@@ -421,21 +464,28 @@ def calibrate_loss():
     errors propagated through each ratio (relative errors combine in
     quadrature). Every losses/rates key has an "_err" companion.
 
-    input taps the signal right before it enters the switch (after the usual
-    input-prep waveplates) — the signal side is an ad hoc connection like
-    source/source_dump, but the herald side isn't: this tap is still on the
-    setup's usual herald path, so herald stays at its normal calibrated
-    delay (~3841ns) rather than being pinned low like source/source_dump.
-    The signal photon arrives sooner here than via the full loop path, so
-    its matching delay sits below the herald's. First time, a cheap
-    coarse_scan counts down from the herald's delay to locate the
-    approximate peak (stopping early once counts drop under 1/5 of the
-    running max, rather than scanning all the way to 0); every time after,
-    the delay found last time is reused directly. Either way, a +/-10ns
-    scan_and_record fine sweep around that point finds and records the real
-    peak (its own edge-resweep still applies within that). Run this stage
-    LAST — unplugging the fiber to tap it disturbs the polarisation for
-    anything downstream.
+    straight_to_dump and input both search for their delay the same way,
+    since neither has a pre-calibrated center to scan around: herald stays
+    at its normal calibrated delay (~3841ns, st.CHANNELS[TRIGG_CH]) — unlike
+    source/source_dump, both taps are still on the setup's usual herald
+    path, only the signal side differs. The signal photon arrives sooner
+    than via the full loop path, so its matching delay sits below the
+    herald's. First time, a cheap coarse_scan counts down from the herald's
+    delay to locate the approximate peak (stopping early once counts drop
+    under 1/5 of the running max, rather than scanning all the way to 0);
+    every time after, the delay found last time is reused directly. Either
+    way, a +/-10ns scan_and_record fine sweep around that point finds and
+    records the real peak (its own edge-resweep still applies within that).
+
+    straight_to_dump is the zero-loop counterpart to dump: same bypass
+    optics as ch2 (input H, path-2 plates parked at 0), but the switch is
+    manually set to 'man' so the signal goes straight to the dump port/
+    detector instead of looping. Measured on st.DUMP_CH.
+
+    input taps the signal right before it enters the switch (after the
+    usual input-prep waveplates) — an ad hoc connection like source/
+    source_dump. Run this stage LAST — unplugging the fiber to tap it
+    disturbs the polarisation for anything downstream.
 
     Returns/reports five quantities:
       det_eff_setup       reference efficiency, fixed at 1.0
@@ -448,15 +498,12 @@ def calibrate_loss():
                            dividing out everything upstream of it, since
                            every rate here already carries the same
                            input-coupling loss
-      loss_to_dump         loss_input_to_setup + loop-to-dump diversion loss
-                           together — the dump path never goes through the
-                           loop-pass optics that ch4/loss_per_loop_pass does,
-                           it diverts straight to the dump port off the same
-                           switch entrance as ch2. C_dump/(C_in*det_eff_dump)
-                           normalises C_dump to the setup detector's
-                           efficiency via det_eff_dump, then divides by C_in
-                           — so it still carries loss_input_to_setup baked
-                           in, same as loss_input_to_setup isn't divided out.
+      loss_to_dump         one-loop-then-dump vs. straight-to-dump, isolating
+                           the loop pass's contribution to the dump path the
+                           same way loss_per_loop_pass isolates it for the
+                           output path = C_dump/C_sdump. Both are already on
+                           the same dump detector, so unlike loss_per_loop_pass
+                           no det_eff normalisation is needed.
 
     Stages are picked from a menu, in any order, any number of times — not a
     fixed sequence. Each menu entry shows when it was last done. Saves after
@@ -464,7 +511,7 @@ def calibrate_loss():
     If a previous (possibly interrupted) run's file exists, its stages are
     loaded so they show up as already-done and count toward the final loss
     computation without being re-run. Finishing computes losses from
-    whichever stages are on file — pick "compute & finish" once all 6 show a
+    whichever stages are on file — pick "compute & finish" once all 7 show a
     done date.
     """
     # Stages source/source_dump are a bare source->detector connection, not
@@ -542,6 +589,19 @@ def calibrate_loss():
         delay7, row7 = _scan_and_record(st.DUMP_CH, center=st.DUMP_DELAYS[1], span=3.0)
         return {'ch': st.DUMP_CH, 'delay_ns': delay7, 'counts': row7}
 
+    def _run_straight_to_dump():
+        prior = stages.get('straight_to_dump', {}).get('delay_ns')
+        _set_input_basis('H')
+        _zero_path2_plates()
+        input("\nSet switch to 'man' (straight to dump, no loop), press Enter when ready...")
+        herald_delay_normal = st.CHANNELS[TRIGG_CH]['delay']
+        if prior is None:
+            print(f"No prior delay on file — coarse-scanning down from the herald's "
+                  f"{herald_delay_normal:.0f}ns delay to locate the peak...")
+            prior = _coarse_scan(st.DUMP_CH, start=herald_delay_normal, stop=0.0)
+        delay_sd, row_sd = _scan_and_record(st.DUMP_CH, center=prior, span=10.0, step=1.0)
+        return {'ch': st.DUMP_CH, 'delay_ns': delay_sd, 'counts': row_sd}
+
     def _run_input():
         prior = stages.get('input', {}).get('delay_ns')
         input("\nLAST STAGE — unplug the signal fiber just before the switch "
@@ -567,6 +627,7 @@ def calibrate_loss():
         ('ch2', 'Zero-loop bypass (signal into setup, no loop)', _run_ch2),
         ('ch4', 'One loop pass (normal loop-output port)', _run_ch4),
         ('dump', 'Loop then dump', _run_dump),
+        ('straight_to_dump', "Straight to dump (zero-loop, switch set to 'man')", _run_straight_to_dump),
         ('input', 'Input into switch (LAST — disturbs polarisation)', _run_input),
     ]
 
@@ -599,14 +660,10 @@ def calibrate_loss():
         estimate with no error bar for older stages recorded before
         per-bin counts existed."""
         s = stages[stage_key]
-        counts, ch = s['counts'], s['ch']
-        bins = counts.get('bins')
-        if not bins:
-            total_rate = counts[f"coinc_ch{ch}"] / counts['int_time'] if counts['int_time'] else 0.0
-            return total_rate, 0.0
-        bin_rates = [b[f"coinc_ch{ch}"] / b['int_time'] for b in bins if b['int_time']]
-        mean_rate = statistics.mean(bin_rates)
-        sem_rate = statistics.stdev(bin_rates) / len(bin_rates) ** 0.5 if len(bin_rates) > 1 else 0.0
+        counts = s['counts']
+        mean_rate, std_rate = _bin_rate_mean_std(counts, s['ch'])
+        n_bins = len(counts.get('bins') or ())
+        sem_rate = std_rate / n_bins ** 0.5 if n_bins > 1 else 0.0
         return mean_rate, sem_rate
 
     def combine(*terms):
@@ -623,23 +680,23 @@ def calibrate_loss():
         rel_sq = sum((p * e / v) ** 2 for (v, e), p in terms)
         return result, abs(result) * rel_sq ** 0.5
 
-    C0, C0d, C2, C4, Cd, Cin = (rate('source'), rate('source_dump'), rate('ch2'),
-                                rate('ch4'), rate('dump'), rate('input'))
+    C0, C0d, C2, C4, Cd, Csd, Cin = (rate('source'), rate('source_dump'), rate('ch2'),
+                                     rate('ch4'), rate('dump'), rate('straight_to_dump'),
+                                     rate('input'))
     rates = {
         'C0': C0[0], 'C0_err': C0[1], 'C0d': C0d[0], 'C0d_err': C0d[1],
         'C2': C2[0], 'C2_err': C2[1], 'C4': C4[0], 'C4_err': C4[1],
-        'Cd': Cd[0], 'Cd_err': Cd[1], 'Cin': Cin[0], 'Cin_err': Cin[1],
+        'Cd': Cd[0], 'Cd_err': Cd[1], 'Csd': Csd[0], 'Csd_err': Csd[1],
+        'Cin': Cin[0], 'Cin_err': Cin[1],
     }
 
     det_eff_dump = combine((C0d, 1), (C0, -1))
     input_loss = combine((C2, 1), (Cin, -1))
     loss_per_loop_pass = combine((C4, 1), (C2, -1))
-    # Cd is on the dump detector, Cin isn't — normalise Cd to the setup
-    # detector's efficiency via det_eff_dump first, then divide by Cin.
-    # Diverts straight off the switch entrance, same as ch2 — never
-    # touches the loop-pass optics ch4 does — so this is
-    # loss_input_to_setup * loop-to-dump diversion loss, not per_loop_pass.
-    loss_to_dump = combine((Cd, 1), (Cin, -1), (det_eff_dump, -1))
+    # Both Cd and Csd are on the dump detector, so no det_eff normalisation
+    # is needed — one-loop-then-dump vs. straight-to-dump isolates the loop
+    # pass's own loss for the dump path.
+    loss_to_dump = combine((Cd, 1), (Csd, -1))
     losses = {
         'det_eff_setup':           1.0,
         'det_eff_setup_err':       0.0,
@@ -1102,10 +1159,10 @@ def main():
             "\t3. Test antilatch server connection\n"
             "\t4. Tune channel delays (zooms in to a precise value)\n"
             "\t5. Unlatch detectors (antilatch only, card untouched)\n"
-            "\t6. Perform tomography (photon counting) + plot\n"
+            "\t6. Perform tomography (fast characterization sweep + plot)\n"
             "\t7. Check single input/output projector (phase tuning)\n"
             "\t8. Calibrate background noise (block/herald/setup, 3 steps)\n"
-            "\t9. Calibrate loss (menu of 5 stages)\n"
+            "\t9. Calibrate loss (menu of 7 stages)\n"
             )
 
         match n:
@@ -1130,7 +1187,8 @@ def main():
                 else:
                     j = input("Which j? (Enter = 0): ").strip()
                     js = [int(j)] if j else [0]
-                tomo = input("Perform output tomo? [y/N] ").strip().lower() == 'y'
+                tomo = input("Sweep all 6 analyzer bases for this input "
+                             "(full collection time each, no plot)? [y/N] ").strip().lower() == 'y'
                 measurement(N, performTomo=tomo, js=js)
             case '3':
                 ping_antilatch()

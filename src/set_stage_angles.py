@@ -6,6 +6,7 @@ from libraries.basis_vectors import basis_angles, tomo_angles
 from libraries.settings import (HWP_IN, QWP_IN, HWP_IN_2, QWP_IN_2,
                                  HWP_TOM_DUMP, QWP_TOM_DUMP,
                                  HWP_TOM_1, QWP_TOM_1, HWP_OUT_2, QWP_OUT_2,
+                                 HWP_1, QWP_1, HWP_12, QWP_12,
                                  COMPORT, Waveplate)
 
 # Input-arm pairs are HWP-then-QWP (state prep, H -> basis): basis_angles.
@@ -20,12 +21,16 @@ _PAIRS = {
     'out2': (HWP_OUT_2, QWP_OUT_2, "Output 2  (HWP_OUT_2 / QWP_OUT_2)", basis_angles),
 }
 
+# Interferometer plates (h1/q1/h2/q2 in getUnitary) — fixed, not basis-driven,
+# so they don't fit _PAIRS; only need OA lookup for 'num' mode below.
+_EXTRA_STAGES = (HWP_1, QWP_1, HWP_12, QWP_12)
+
 # Map stage ID → Waveplate so OA can be applied when addressing by number
 _STAGE_MAP: dict[int, Waveplate] = {
     wp.ID: wp
     for _, (hwp, qwp, _, _) in _PAIRS.items()
     for wp in (hwp, qwp)
-}
+} | {wp.ID: wp for wp in _EXTRA_STAGES}
 
 
 def _beep():

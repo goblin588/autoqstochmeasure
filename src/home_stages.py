@@ -10,7 +10,8 @@ if '--sim' in sys.argv:
 from libraries.settings import (
     HWP_IN, QWP_IN, HWP_IN_2, QWP_IN_2,
     HWP_TOM_1, QWP_TOM_1, HWP_OUT_2, QWP_OUT_2,
-    HWP_TOM_DUMP, QWP_TOM_DUMP, SIM_MODE, COMPORT
+    HWP_TOM_DUMP, QWP_TOM_DUMP, HWP_1, QWP_1, HWP_12, QWP_12,
+    SIM_MODE, COMPORT
 )
 
 ALL_STAGES = {
@@ -24,6 +25,10 @@ ALL_STAGES = {
     QWP_OUT_2.ID:    'QWP_OUT_2',
     HWP_TOM_DUMP.ID: 'HWP_TOM_DUMP',
     QWP_TOM_DUMP.ID: 'QWP_TOM_DUMP',
+    HWP_1.ID:        'HWP_1',
+    QWP_1.ID:        'QWP_1',
+    HWP_12.ID:       'HWP_12',
+    QWP_12.ID:       'QWP_12',
 }
 
 _NOT_REFERENCED = {'0A', '0B', '0C', '0D', '0E', '0F', '10', '11'}
