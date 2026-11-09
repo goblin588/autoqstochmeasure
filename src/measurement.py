@@ -164,6 +164,8 @@ LOSS_STAGE_LABELS = {
     'dump':             'one_loop_dump',
     'straight_to_dump': 'zero_loop_dump',
     'input':            'input_counts',
+    'ch5050_exit':      'fifty_fifty_exit',
+    'ch5050_loop':      'fifty_fifty_loop',
 }
 
 
@@ -292,6 +294,21 @@ def _acquire_counts_all(duration, delays=None):
                            delays=delays if delays is not None else delays_for())
 
 
+def _record_all_channels(n_bins=20, bin_s=5.0):
+    """20x5s binned coincidence counts on every channel (LOOP_CHS+DUMP_CH)
+    at their pre-tuned delays — same primitive as _acquire_background, no
+    scan needed. Every channel's counts ride along in one row so a
+    miscalibrated waveplate angle shows up as signal in the wrong channel
+    instead of silently vanishing."""
+    if SIM_MODE:
+        row = _sim_row(bin_s * n_bins, DET_CHS)
+        row['bins'] = [_sim_row(bin_s, DET_CHS) for _ in range(n_bins)]
+        return row
+    from libraries.countingcard import acquire_counts_binned
+    return acquire_counts_binned(n_bins=n_bins, bin_s=bin_s, signal_chs=DET_CHS,
+                                  delays=delays_for())
+
+
 def _acquire_background(N):
     """Quick background/accidental-coincidence check for N's channels, run
     automatically at the start of measurement() — every channel's delay
@@ -410,33 +427,54 @@ def _zero_path2_plates():
 
 
 def _set_bypass_optics():
-    """Zero-loop bypass: input H, every motorized path-2 plate parked at 0
-    (nothing rotated into the loop) — the bypass itself is done by the
-    manual H2 plate and the switch, neither of which this program can
-    drive, so it prompts for those instead. Sets everything this stage
-    depends on — self-contained so it's safe to run even if an earlier
-    stage was skipped via resume."""
+    """Zero loops, all exit: input H, IN_2 parked at 0 (no ring coupling),
+    HWP_12/QWP_12 at 22.5°/0° routes everything straight out the exit
+    port. Fully automated — no manual switch/plate step needed. Sets
+    everything this stage depends on — self-contained so it's safe to run
+    even if an earlier stage was skipped via resume."""
     _set_input_basis('H')
     _zero_path2_plates()
-    input("Manually set H2 to 45° and switch dwell to 120 ns, press Enter when ready...")
+    print("Setting HWP_12/QWP_12 to 22.5°/0° (zero-loop, all exit)")
+    tl.move_stage(QWP_12, 0, COMPORT)
+    tl.move_stage(HWP_12, 22.5, COMPORT)
 
 
 def _set_loop_optics():
-    """One loop pass: input H, IN_2 rotates it to V on the way in; the
-    loop's fixed V-path plates do nothing, so it exits the loop as V.
-    OUT_2 is parked at 0/0 to do nothing, sending it straight back; it
-    crosses IN_2 again (V->H, same physical plates run in reverse), and
-    the loop's fixed H-path plates rotate that H to V, which is what
-    reaches the detector. Self-contained, same reasoning as
-    _set_bypass_optics."""
+    """One loop then exit: input H, IN_2 parked at 0 (pass-through both
+    ways), HWP_12/QWP_12 at 0 (loop arm does nothing), HWP_OUT_2/QWP_OUT_2
+    at 45°/0° flips H->V so it goes around the loop; it crosses IN_2 again
+    (still 0, pass-through), then HWP_1/QWP_1 at 45°/0° routes it out the
+    exit port. Fully automated — no manual switch needed. Self-contained,
+    same reasoning as _set_bypass_optics."""
     _set_input_basis('H')
-    print("Setting HWP_OUT_2/QWP_OUT_2 to 0°/0° (pass-through)")
+    print("Setting HWP_IN_2/QWP_IN_2 and HWP_12/QWP_12 to 0 (pass-through / loop arm idle)")
+    tl.move_stage(QWP_IN_2, 0, COMPORT)
+    tl.move_stage(HWP_IN_2, 0, COMPORT)
+    tl.move_stage(QWP_12, 0, COMPORT)
+    tl.move_stage(HWP_12, 0, COMPORT)
+    print("Setting HWP_OUT_2/QWP_OUT_2 to 45°/0° (H->V, sends it around the loop)")
     tl.move_stage(QWP_OUT_2, 0, COMPORT)
-    tl.move_stage(HWP_OUT_2, 0, COMPORT)
-    hwp_v, qwp_v = basis_angles['V']
-    print(f"Setting HWP_IN_2 to {hwp_v}°, QWP_IN_2 to {qwp_v}° (H->V)")
-    tl.move_stage(HWP_IN_2, hwp_v, COMPORT)
-    tl.move_stage(QWP_IN_2, qwp_v, COMPORT)
+    tl.move_stage(HWP_OUT_2, 45, COMPORT)
+    print("Setting HWP_1/QWP_1 to 45°/0° (routes it back out the exit port)")
+    tl.move_stage(QWP_1, 0, COMPORT)
+    tl.move_stage(HWP_1, 45, COMPORT)
+
+
+def _set_5050_optics():
+    """50/50 loop/exit split: input H, Hin2/H1 at 0 (Q1/Qin2 at 0), HWP_12
+    at 22.5° (QWP_12 at 0) puts the recombined output in an equal
+    superposition of path1 (TOM_1, exit) and path2 (OUT_2, loop) —
+    confirmed via getUnitary, see tests/test_loop_exit_split.py. 45° on
+    HWP_12 is a different, deterministic all-exit solution, not this.
+    Self-contained, same pattern as the other two optics setters."""
+    _set_input_basis('H')
+    print("Setting HWP_IN_2/HWP_1 to 0°, HWP_12 to 22.5° (50/50 exit/loop split)")
+    tl.move_stage(QWP_IN_2, 0, COMPORT)
+    tl.move_stage(HWP_IN_2, 0, COMPORT)
+    tl.move_stage(QWP_1, 0, COMPORT)
+    tl.move_stage(HWP_1, 0, COMPORT)
+    tl.move_stage(QWP_12, 0, COMPORT)
+    tl.move_stage(HWP_12, 22.5, COMPORT)
 
 
 def calibrate_loss():
@@ -572,15 +610,11 @@ def calibrate_loss():
     def _run_ch2():
         input("\nPlug signal into the setup, press Enter when ready...")
         _set_bypass_optics()
-        delay2, row2 = _scan_and_record(2, center=st.CHANNELS[2]['delay'], span=3.0)
-        return {'ch': 2, 'delay_ns': delay2, 'counts': row2}
+        return {'ch': 2, 'counts': _record_all_channels()}
 
     def _run_ch4():
         _set_loop_optics()
-        input("\nOne-loop pass — no fiber changes needed. Set switch dwell to 120 ns "
-              "for 1 loop, press Enter when ready...")
-        delay4, row4 = _scan_and_record(4, center=st.CHANNELS[4]['delay'], span=3.0)
-        return {'ch': 4, 'delay_ns': delay4, 'counts': row4}
+        return {'ch': 4, 'counts': _record_all_channels()}
 
     def _run_dump():
         _set_loop_optics()
@@ -621,15 +655,33 @@ def calibrate_loss():
         delay_in, row_in = _scan_and_record(ch_in, center=prior, span=10.0, step=1.0)
         return {'ch': ch_in, 'delay_ns': delay_in, 'counts': row_in}
 
+    def _run_ch5050_exit():
+        _set_5050_optics()
+        input("\n50/50 split — no fiber changes needed. Press Enter when ready...")
+        delay2, row2 = _scan_and_record(2, center=st.CHANNELS[2]['delay'], span=3.0)
+        return {'ch': 2, 'delay_ns': delay2, 'counts': row2}
+
+    def _run_ch5050_loop():
+        _set_5050_optics()
+        input("\n50/50 split — no fiber changes needed. Press Enter when ready...")
+        delay4, row4 = _scan_and_record(4, center=st.CHANNELS[4]['delay'], span=3.0)
+        return {'ch': 4, 'delay_ns': delay4, 'counts': row4}
+
     stage_menu = [
         ('source', 'Calibrate signal herald (bare source -> output detector)', _run_source),
         ('source_dump', 'Calibrate herald dump (bare source -> dump detector)', _run_source_dump),
         ('ch2', 'Zero-loop bypass (signal into setup, no loop)', _run_ch2),
         ('ch4', 'One loop pass (normal loop-output port)', _run_ch4),
+        ('ch5050_exit', '50/50 split - exit channel (ch2)', _run_ch5050_exit),
+        ('ch5050_loop', '50/50 split - loop channel (ch4)', _run_ch5050_loop),
         ('dump', 'Loop then dump', _run_dump),
         ('straight_to_dump', "Straight to dump (zero-loop, switch set to 'man')", _run_straight_to_dump),
         ('input', 'Input into switch (LAST — disturbs polarisation)', _run_input),
     ]
+    # ch5050_* aren't fed into the loss formulas below (they're there to
+    # directly observe the real 50/50 split on hardware) so they're not
+    # required before "compute & finish".
+    required_stages = [key for key, _, _ in stage_menu if not key.startswith('ch5050')]
 
     while True:
         print("\nLoss calibration stages:")
@@ -649,7 +701,7 @@ def calibrate_loss():
         stages[key] = result
         _save()
 
-    missing = [key for key, _, _ in stage_menu if key not in stages]
+    missing = [key for key in required_stages if key not in stages]
     if missing:
         print(f"Missing stages, can't compute losses yet: {', '.join(missing)}")
         return _save()
@@ -1163,6 +1215,7 @@ def main():
             "\t7. Check single input/output projector (phase tuning)\n"
             "\t8. Calibrate background noise (block/herald/setup, 3 steps)\n"
             "\t9. Calibrate loss (menu of 7 stages)\n"
+            "\t10. Periodically unlatch detectors (repeats until Ctrl+C)\n"
             )
 
         match n:
@@ -1226,8 +1279,22 @@ def main():
                 calibrate_background()
             case '9':
                 calibrate_loss()
+            case '10':
+                if SIM_MODE:
+                    print("[SIM MODE] no detectors to unlatch")
+                else:
+                    from hardware.detector import reset_detectors
+                    period = float(input("Unlatch period, in seconds: ").strip())
+                    print(f"Unlatching detectors every {period} s (Ctrl+C to stop)...")
+                    try:
+                        while True:
+                            time.sleep(period)
+                            if reset_detectors():
+                                print("Detectors unlatched (bias voltages cycled)")
+                    except KeyboardInterrupt:
+                        print("\nPeriodic unlatching stopped.")
             case _:
-                print("Please choose a valid option 1-9 from list:")
+                print("Please choose a valid option 1-10 from list:")
 
 
 if __name__ == "__main__":
