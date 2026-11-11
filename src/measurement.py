@@ -361,15 +361,19 @@ def _acquire_background(N):
     return acquire_counts_binned(n_bins=n_bins, bin_s=bin_s, signal_chs=chs, delays=delays)
 
 
-def calibrate_background():
+def calibrate_background(duration=None):
     """Per-channel background/accidental coincidence rate: every channel's
     delay is bumped +st.BACKGROUND_OFFSET_NS ns off its tuned value (herald
     left alone), so the coincidence window misses the real photon arrival
     and only counts accidentals — no physical beam blocking needed.
 
+    duration=None asks interactively (default 60s); pass a number to skip
+    the prompt entirely, e.g. for unattended/queued use.
+
     Saves data/{timestamp}_noise_calibration.json.
     """
-    duration = _ask_calibration_duration()
+    if duration is None:
+        duration = _ask_calibration_duration()
     delays = delays_for()
     for ch in DET_CHS:
         delays[ch - 1] += st.BACKGROUND_OFFSET_NS
@@ -438,17 +442,36 @@ def _zero_path2_plates():
     tl.move_stage(HWP_OUT_2, 0, COMPORT)
 
 
+def _zero_analyzer_plates():
+    """Park TOM_1/TOM_DUMP (the basis analyzers used by perform_tomo/
+    check_projector, not by any of the raw-intensity optics setters below)
+    at 0 -- a lossless rotation can't itself change total intensity, but a
+    leftover angle from an earlier tomography run has no business being set
+    during a loop-exit-probability measurement, so every optics setter
+    below parks it explicitly rather than leaving it to chance."""
+    tl.move_stage(HWP_TOM_1, 0, COMPORT)
+    tl.move_stage(QWP_TOM_1, 0, COMPORT)
+    tl.move_stage(HWP_TOM_DUMP, 0, COMPORT)
+    tl.move_stage(QWP_TOM_DUMP, 0, COMPORT)
+
+
 def _set_bypass_optics():
-    """Zero loops, all exit: input H, IN_2 parked at 0 (no ring coupling),
-    HWP_12/QWP_12 at 45°/0° routes everything straight out the exit
-    port (22.5 would split H into D, sending only half out the exit --
-    see tests/test_loop_exit_split.py). Fully automated — no manual
-    switch/plate step needed. Sets everything this stage depends on --
-    self-contained so it's safe to run even if an earlier stage was
-    skipped via resume."""
+    """Zero loops, all exit: input H, IN_2/TOM_1/TOM_DUMP parked at 0 (no
+    ring coupling, no stray analyzer rotation), H1/Q1 parked at 0 (unused
+    here -- the coin on path 1 never sees any amplitude when input is pure
+    H and everything exits on pass 1, but leaving it at a leftover value
+    from an earlier stage is still sloppy), HWP_12/QWP_12 at 45°/0° routes
+    everything straight out the exit port (22.5 would split H into D,
+    sending only half out the exit -- see tests/test_loop_exit_split.py).
+    Fully automated — no manual switch/plate step needed. Sets everything
+    this stage depends on -- self-contained so it's safe to run even if an
+    earlier stage was skipped via resume."""
     _set_input_basis('H')
     _zero_path2_plates()
-    print("Setting HWP_12/QWP_12 to 45°/0° (zero-loop, all exit)")
+    _zero_analyzer_plates()
+    print("Setting HWP_1/QWP_1 to 0°, HWP_12/QWP_12 to 45°/0° (zero-loop, all exit)")
+    tl.move_stage(QWP_1, 0, COMPORT)
+    tl.move_stage(HWP_1, 0, COMPORT)
     tl.move_stage(QWP_12, 0, COMPORT)
     tl.move_stage(HWP_12, 45, COMPORT)
 
@@ -459,8 +482,9 @@ def _set_loop_optics():
     at 45°/0° flips H->V so it goes around the loop; it crosses IN_2 again
     (still 0, pass-through), then HWP_1/QWP_1 at 45°/0° routes it out the
     exit port. Fully automated — no manual switch needed. Self-contained,
-    same reasoning as _set_bypass_optics."""
+    same reasoning as _set_bypass_optics (also parks TOM_1/TOM_DUMP)."""
     _set_input_basis('H')
+    _zero_analyzer_plates()
     print("Setting HWP_IN_2/QWP_IN_2 and HWP_12/QWP_12 to 0 (pass-through / loop arm idle)")
     tl.move_stage(QWP_IN_2, 0, COMPORT)
     tl.move_stage(HWP_IN_2, 0, COMPORT)
@@ -475,16 +499,24 @@ def _set_loop_optics():
 
 
 def _set_5050_optics():
-    """50/50 loop/exit split: input H, Hin2/H1 at 0 (Q1/Qin2 at 0), HWP_12
-    at 22.5° (QWP_12 at 0) puts the recombined output in an equal
-    superposition of path1 (TOM_1, exit) and path2 (OUT_2, loop) —
-    confirmed via getUnitary, see tests/test_loop_exit_split.py. 45° on
-    HWP_12 is a different, deterministic all-exit solution, not this.
-    Self-contained, same pattern as the other two optics setters."""
+    """50/50 loop/exit split: input H, path-2 plates (IN_2/OUT_2) and H1/Q1
+    parked at 0, HWP_12 at 22.5° (QWP_12 at 0) puts the recombined output
+    in an equal superposition of path1 (TOM_1, exit) and path2 (OUT_2,
+    loop) — confirmed via getUnitary, see tests/test_loop_exit_split.py.
+    45° on HWP_12 is a different, deterministic all-exit solution, not
+    this.
+
+    OUT_2 matters here: it sits inside the recirculating loop (applied to
+    the continuing beam every pass, not just a one-shot analyzer), so a
+    leftover angle from an earlier stage (e.g. _set_loop_optics leaves it
+    at 45°/0°) would silently break the assumed-stationary 50/50 split
+    every pass after the first -- _zero_path2_plates() parks both IN_2 and
+    OUT_2, not just IN_2, to rule that out. Self-contained, same pattern
+    as the other two optics setters (also parks TOM_1/TOM_DUMP)."""
     _set_input_basis('H')
-    print("Setting HWP_IN_2/HWP_1 to 0°, HWP_12 to 22.5° (50/50 exit/loop split)")
-    tl.move_stage(QWP_IN_2, 0, COMPORT)
-    tl.move_stage(HWP_IN_2, 0, COMPORT)
+    _zero_path2_plates()
+    _zero_analyzer_plates()
+    print("Setting HWP_1/QWP_1 to 0°, HWP_12 to 22.5° (50/50 exit/loop split)")
     tl.move_stage(QWP_1, 0, COMPORT)
     tl.move_stage(HWP_1, 0, COMPORT)
     tl.move_stage(QWP_12, 0, COMPORT)
@@ -504,7 +536,9 @@ def _set_loop3_optics():
     loop model (PBS -> coin -> fixed mirror phase -> PBS_dag -> OUT_2),
     with the mirror phase pinned to the real hardware value (m1+m2+m3 =
     3.16+3.77+3.74, same as every U_N preset) since it isn't a motorized
-    stage. Not yet confirmed on the bench."""
+    stage. Not yet confirmed on the bench. Also parks TOM_1/TOM_DUMP, as
+    every optics setter in this file does."""
+    _zero_analyzer_plates()
     print("Setting HWP_IN/QWP_IN to 93.445°/85.188° (loop-3-peaking input state)")
     tl.move_stage(HWP_IN, 93.445, COMPORT)
     tl.move_stage(QWP_IN, 85.188, COMPORT)
@@ -526,7 +560,9 @@ def _set_loop4_optics():
     30.1% of the photon exits there, vs. 28.9%/16.2% at loop passes 3/5
     (close to loop 3's share, but still the highest of the six). Same
     derivation and caveat as _set_loop3_optics -- optimizer-found, not an
-    exact solution, not yet confirmed on the bench."""
+    exact solution, not yet confirmed on the bench. Also parks TOM_1/
+    TOM_DUMP, as every optics setter in this file does."""
+    _zero_analyzer_plates()
     print("Setting HWP_IN/QWP_IN to 131.788°/99.785° (loop-4-peaking input state)")
     tl.move_stage(HWP_IN, 131.788, COMPORT)
     tl.move_stage(QWP_IN, 99.785, COMPORT)
@@ -734,16 +770,48 @@ def calibrate_loss(run_stages=None):
 
 def _maybe_calibrate():
     """Offer to (re)run background calibration before a measurement, showing
-    when it was last done."""
+    when it was last done -- then do the same for the loss-calibration
+    stages (ch2/ch4/5050), via _maybe_calibrate_loss(). One pre-measurement
+    check from the operator's point of view, interactive-path only (see
+    measurement()'s auto=True branch, which skips all of this)."""
     latest = _latest_calibration()
     if latest is None:
         if input("No background calibration on file yet. Run one now? [Y/n] ").strip().lower() in ('', 'y'):
             calibrate_background()
+    else:
+        ans = input(f"Last background calibration: {_calibration_date(latest)} — "
+                   "perform a new one now? [y/N] ").strip().lower()
+        if ans == 'y':
+            calibrate_background()
+    _maybe_calibrate_loss()
+
+
+def _maybe_calibrate_loss():
+    """Show when each loss-calibration stage (ch2/ch4/5050) was last done
+    and let the operator (re)run any of them now, reusing calibrate_loss's
+    own stage logic via run_stages= rather than duplicating it here."""
+    _, existing = _find_latest_loss_calibration()
+    stages = existing.get('stages', {})
+    keys = ['ch2', 'ch4', '5050']
+    print("\nLoss calibration stages:")
+    for key in keys:
+        when = stages.get(key, {}).get('saved_at', 'never')
+        print(f"\t{key}: last done {when}")
+    ans = input("Run any of these now? Comma-separated keys (e.g. ch2,5050), "
+                "'all missing', or Enter to skip: ").strip().lower()
+    if not ans or ans == 'skip':
         return
-    ans = input(f"Last background calibration: {_calibration_date(latest)} — "
-               "perform a new one now? [y/N] ").strip().lower()
-    if ans == 'y':
-        calibrate_background()
+    if ans == 'all missing':
+        run_stages = [key for key in keys if key not in stages]
+        if not run_stages:
+            print("Nothing missing.")
+            return
+    else:
+        run_stages = [key.strip() for key in ans.split(',') if key.strip() in keys]
+        if not run_stages:
+            print("No valid stage keys given, skipping.")
+            return
+    calibrate_loss(run_stages=run_stages)
 
 def _input_states(N):
     """All j's with a defined input state for process N.
@@ -834,7 +902,7 @@ def measurement(N, performTomo=False, js=None, duration_s=None, auto=False):
     """
     if auto:
         if _latest_calibration() is None:
-            calibrate_background()
+            calibrate_background(duration=60.0)
     else:
         _maybe_calibrate()
 
