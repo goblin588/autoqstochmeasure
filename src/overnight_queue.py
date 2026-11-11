@@ -24,9 +24,8 @@ import measurement as meas
 
 
 LOSS_STAGES = [
-    ('ch2',  'Zero-loop bypass (signal into setup, no loop)'),
-    ('ch4',  'One loop pass (normal loop-output port)'),
-    ('5050', '50/50 split, all channels (independent cross-check)'),
+    ('loop01', 'Zero-loop + one-loop pass, together'),
+    ('5050',   '50/50 split, all channels (independent cross-check)'),
 ]
 
 

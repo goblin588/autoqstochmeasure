@@ -579,11 +579,27 @@ def _set_loop4_optics():
     tl.move_stage(QWP_OUT_2, 117.523, COMPORT)
 
 
+def _loss_stage_date(stages, key):
+    """Display date for a loss-calibration stage key. 'loop01' is really
+    two underlying stages (ch2+ch4) that are always run together now (both
+    automated, both needed for loss_per_loop_pass, no reason to let one
+    run without the other) -- 'never' unless both are on file, else the
+    earlier of the two timestamps."""
+    if key == 'loop01':
+        d2 = stages.get('ch2', {}).get('saved_at')
+        d4 = stages.get('ch4', {}).get('saved_at')
+        return min(d2, d4) if d2 and d4 else 'never'
+    return stages.get(key, {}).get('saved_at', 'never')
+
+
+def _loss_stage_done(stages, key):
+    return _loss_stage_date(stages, key) != 'never'
+
+
 def calibrate_loss(run_stages=None):
-    """Menu-driven loss calibration over 3 stages, all fully automated (no
+    """Menu-driven loss calibration over 2 stages, both fully automated (no
     fiber replugging — safe to run unattended/queued):
-      ch2    zero-loop bypass, signal into setup, exits without looping -> C_ch2
-      ch4    one loop pass, exits via the normal loop-output port       -> C_ch4
+      loop01 zero-loop bypass + one loop pass, together -> C_ch2, C_ch4
       5050   50/50 split optics, one recording across every loop channel
 
     (Previously also had source/source_dump/dump/straight_to_dump/input
@@ -659,17 +675,23 @@ def calibrate_loss(run_stages=None):
         _set_loop_optics()
         return {'ch': st.LOOP_CHS[1], 'counts': _record_all_channels()}
 
+    def _run_loop01():
+        """ch2 (zero-loop) and ch4 (one loop pass) always run together --
+        both fully automated, both needed for loss_per_loop_pass, no
+        reason to let them drift out of sync by running one without the
+        other. Returns both results for the dispatch loop to merge in."""
+        return {'ch2': _run_ch2(), 'ch4': _run_ch4()}
+
     def _run_5050():
         """50/50 optics, one recording across every loop channel at once --
         the loss-per-pass estimate comes from fitting how fast counts decay
         channel-to-channel (see _fit_loop_decay), not from any single
         channel in isolation."""
         _set_5050_optics()
-        return {'counts': _record_all_channels()}
+        return {'5050': {'counts': _record_all_channels()}}
 
     stage_menu = [
-        ('ch2', 'Zero-loop bypass (signal into setup, no loop)', _run_ch2),
-        ('ch4', 'One loop pass (normal loop-output port)', _run_ch4),
+        ('loop01', 'Zero-loop + one-loop pass, together', _run_loop01),
         ('5050', '50/50 split, all channels (independent cross-check)', _run_5050),
     ]
     # '5050' computes its own independent loss figure (see below) rather
@@ -678,31 +700,32 @@ def calibrate_loss(run_stages=None):
     required_stages = ['ch2', 'ch4']
     runners = {key: run for key, _, run in stage_menu}
 
+    def _apply(results):
+        now = datetime.datetime.now().isoformat()
+        for key, result in results.items():
+            result['saved_at'] = now
+            stages[key] = result
+        _save()
+
     if run_stages is not None:
         for key in run_stages:
             print(f"\nRunning loss-calibration stage: {key}")
-            result = runners[key]()
-            result['saved_at'] = datetime.datetime.now().isoformat()
-            stages[key] = result
-            _save()
+            _apply(runners[key]())
     else:
         while True:
             print("\nLoss calibration stages:")
             for i, (key, label, _) in enumerate(stage_menu, 1):
-                when = stages.get(key, {}).get('saved_at', 'never')
+                when = _loss_stage_date(stages, key)
                 print(f"\t{i}. {label} (last done {when})")
             choice = input("\t0. Compute losses & finish\n> ").strip()
             if choice == '0':
                 break
             try:
-                key, _, run = stage_menu[int(choice) - 1]
+                _, _, run = stage_menu[int(choice) - 1]
             except (ValueError, IndexError):
                 print("Enter a number from the menu")
                 continue
-            result = run()
-            result['saved_at'] = datetime.datetime.now().isoformat()
-            stages[key] = result
-            _save()
+            _apply(run())
 
     missing = [key for key in required_stages if key not in stages]
     if missing:
@@ -771,7 +794,7 @@ def calibrate_loss(run_stages=None):
 def _maybe_calibrate():
     """Offer to (re)run background calibration before a measurement, showing
     when it was last done -- then do the same for the loss-calibration
-    stages (ch2/ch4/5050), via _maybe_calibrate_loss(). One pre-measurement
+    stages (loop01/5050), via _maybe_calibrate_loss(). One pre-measurement
     check from the operator's point of view, interactive-path only (see
     measurement()'s auto=True branch, which skips all of this)."""
     latest = _latest_calibration()
@@ -787,22 +810,21 @@ def _maybe_calibrate():
 
 
 def _maybe_calibrate_loss():
-    """Show when each loss-calibration stage (ch2/ch4/5050) was last done
+    """Show when each loss-calibration stage (loop01/5050) was last done
     and let the operator (re)run any of them now, reusing calibrate_loss's
     own stage logic via run_stages= rather than duplicating it here."""
     _, existing = _find_latest_loss_calibration()
     stages = existing.get('stages', {})
-    keys = ['ch2', 'ch4', '5050']
+    keys = ['loop01', '5050']
     print("\nLoss calibration stages:")
     for key in keys:
-        when = stages.get(key, {}).get('saved_at', 'never')
-        print(f"\t{key}: last done {when}")
-    ans = input("Run any of these now? Comma-separated keys (e.g. ch2,5050), "
+        print(f"\t{key}: last done {_loss_stage_date(stages, key)}")
+    ans = input("Run any of these now? Comma-separated keys (e.g. loop01,5050), "
                 "'all missing', or Enter to skip: ").strip().lower()
     if not ans or ans == 'skip':
         return
     if ans == 'all missing':
-        run_stages = [key for key in keys if key not in stages]
+        run_stages = [key for key in keys if not _loss_stage_done(stages, key)]
         if not run_stages:
             print("Nothing missing.")
             return
