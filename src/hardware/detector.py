@@ -7,7 +7,8 @@ import clr
 import os
 
 from libraries.settings import (ANTILATCH_HOST, ANTILATCH_PORT,
-                                ANTILATCH_DEVICE_IDS, ANTILATCH_BIAS_VOLTAGES)
+                                ANTILATCH_DEVICE_IDS, ANTILATCH_BIAS_VOLTAGES,
+                                LOOP_CHS)
 
 from System import Int32
 
@@ -180,12 +181,27 @@ class Logic16:
 
         return np.array(counts_coinc, dtype=int), np.array(counts_singles, dtype=int), timecounter
 
-    def antilatch_check(self, singles_to_check):
+    def antilatch_check(self, singles_to_check, pos_singles):
         """
         Checks for latching events, both in the case of one detector latching (any) or all detectors latching (all). It is a good idea to differentiate between the two cases: if all detectors latch, it might be indicative of the cryostat being warm.
+
+        The loop channels (settings.LOOP_CHS) all sit on one distribution
+        board fed by a single detector, so any one of them reading nonzero
+        already proves that detector isn't latched -- checking each loop
+        channel independently would flag the normal, expected case of an
+        optics config that only routes light to one or two loop channels
+        (e.g. _set_bypass_optics) as a latch. They're checked as one group
+        (latched only if ALL of them are zero); every other monitored
+        channel (herald, dump) is its own detector and stays checked
+        individually.
         """
-        check = [singles==0 for singles in singles_to_check]
-        return any(check) + all(check)
+        counts_by_ch = dict(zip(pos_singles, singles_to_check))
+        loop_group = [ch for ch in pos_singles if ch in LOOP_CHS]
+        other_chs = [ch for ch in pos_singles if ch not in LOOP_CHS]
+        group_zero = [counts_by_ch[ch] == 0 for ch in other_chs]
+        if loop_group:
+            group_zero.append(all(counts_by_ch[ch] == 0 for ch in loop_group))
+        return any(group_zero) + all(group_zero)
 
     def read_counts_integrated(self, pos_coincidence, pos_singles, neg_singles=[0]):
         """
@@ -213,7 +229,7 @@ class Logic16:
                                                                 pos_singles=pos_singles,
                                                                 neg_singles=neg_singles)
 
-            antilatch_flags = self.antilatch_check(s_counts)
+            antilatch_flags = self.antilatch_check(s_counts, pos_singles)
             if antilatch_flags > 0:
                 # Ping in the background so the readout cadence never stalls on the
                 # server (up to 10 s if unreachable). At most one ping in flight;

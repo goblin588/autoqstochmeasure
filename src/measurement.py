@@ -178,11 +178,10 @@ def _fit_loop_decay(counts, loop_chs=None):
 
 
 # Descriptive labels for calibrate_loss's 3 stage keys, used wherever a
-# stage summary is shown to a human or embedded in a measurement's JSON —
-# the raw keys (ch2/ch4) read as unlabelled channel numbers.
+# stage summary is shown to a human or embedded in a measurement's JSON.
 LOSS_STAGE_LABELS = {
-    'ch2':   'zero_loop_output',
-    'ch4':   'one_loop',
+    'loop0': 'zero_loop_output',
+    'loop1': 'one_loop',
     '5050':  'fifty_fifty_all_channels',
 }
 
@@ -222,7 +221,7 @@ def _save_results(rows, N, label, background=None):
     (loss_per_loop_pass[_err], loss_per_loop_pass_5050[_err] — whichever
     calibrate_loss managed to compute), and 'file'. The raw per-bin
     recordings stay in calibrate_loss's own file; a measurement's JSON only
-    needs the summary. ch2/ch4 each have one representative channel;
+    needs the summary. loop0/loop1 each have one representative channel;
     '5050' doesn't (it records every loop channel in one go), so its
     summary is {ch: {mean_hz, std_hz}} per channel instead of a single
     rate.
@@ -581,14 +580,14 @@ def _set_loop4_optics():
 
 def _loss_stage_date(stages, key):
     """Display date for a loss-calibration stage key. 'loop01' is really
-    two underlying stages (ch2+ch4) that are always run together now (both
-    automated, both needed for loss_per_loop_pass, no reason to let one
-    run without the other) -- 'never' unless both are on file, else the
-    earlier of the two timestamps."""
+    two underlying stages (loop0+loop1) that are always run together now
+    (both automated, both needed for loss_per_loop_pass, no reason to let
+    one run without the other) -- 'never' unless both are on file, else
+    the earlier of the two timestamps."""
     if key == 'loop01':
-        d2 = stages.get('ch2', {}).get('saved_at')
-        d4 = stages.get('ch4', {}).get('saved_at')
-        return min(d2, d4) if d2 and d4 else 'never'
+        d0 = stages.get('loop0', {}).get('saved_at')
+        d1 = stages.get('loop1', {}).get('saved_at')
+        return min(d0, d1) if d0 and d1 else 'never'
     return stages.get(key, {}).get('saved_at', 'never')
 
 
@@ -599,7 +598,7 @@ def _loss_stage_done(stages, key):
 def calibrate_loss(run_stages=None):
     """Menu-driven loss calibration over 2 stages, both fully automated (no
     fiber replugging — safe to run unattended/queued):
-      loop01 zero-loop bypass + one loop pass, together -> C_ch2, C_ch4
+      loop01 zero-loop bypass + one loop pass, together -> loop0, loop1
       5050   50/50 split optics, one recording across every loop channel
 
     (Previously also had source/source_dump/dump/straight_to_dump/input
@@ -615,10 +614,10 @@ def calibrate_loss(run_stages=None):
 
     Returns/reports loss_per_loop_pass by two independent methods, so they
     can be checked against each other:
-      loss_per_loop_pass      = C_ch4/C_ch2 — ch2/ch4's optics each put ~all
-                           the light deterministically at one channel, so
-                           the ratio between the two stages is the per-pass
-                           loss directly.
+      loss_per_loop_pass      = loop1/loop0 — loop0/loop1's optics each put
+                           ~all the light deterministically at one channel,
+                           so the ratio between the two stages is the
+                           per-pass loss directly.
       loss_per_loop_pass_5050 = the 50/50 stage's channel-to-channel count
                            decay (fit across all 6 channels at once, see
                            _fit_loop_decay), divided by the known 0.5
@@ -633,10 +632,10 @@ def calibrate_loss(run_stages=None):
     If a previous (possibly interrupted) run's file exists, its stages are
     loaded so they show up as already-done and count toward the final loss
     computation without being re-run. Finishing computes losses from
-    whichever stages are on file — pick "compute & finish" once ch2/ch4 show
-    a done date.
+    whichever stages are on file — pick "compute & finish" once loop0/loop1
+    show a done date.
 
-    run_stages: a list of stage keys (e.g. ['ch2']) to run non-interactively
+    run_stages: a list of stage keys (e.g. ['loop01']) to run non-interactively
     instead of showing the menu -- for unattended/queued use. Still falls
     through to "compute & finish" afterward, so calling this once per stage
     across separate queue steps resumes/accumulates via the loss-calibration
@@ -667,20 +666,20 @@ def calibrate_loss(run_stages=None):
         print(f"  (saved -> {path.name})")
         return meta
 
-    def _run_ch2():
+    def _run_loop0():
         _set_bypass_optics()
         return {'ch': st.LOOP_CHS[0], 'counts': _record_all_channels()}
 
-    def _run_ch4():
+    def _run_loop1():
         _set_loop_optics()
         return {'ch': st.LOOP_CHS[1], 'counts': _record_all_channels()}
 
     def _run_loop01():
-        """ch2 (zero-loop) and ch4 (one loop pass) always run together --
-        both fully automated, both needed for loss_per_loop_pass, no
+        """loop0 (zero-loop) and loop1 (one loop pass) always run together
+        -- both fully automated, both needed for loss_per_loop_pass, no
         reason to let them drift out of sync by running one without the
         other. Returns both results for the dispatch loop to merge in."""
-        return {'ch2': _run_ch2(), 'ch4': _run_ch4()}
+        return {'loop0': _run_loop0(), 'loop1': _run_loop1()}
 
     def _run_5050():
         """50/50 optics, one recording across every loop channel at once --
@@ -695,9 +694,9 @@ def calibrate_loss(run_stages=None):
         ('5050', '50/50 split, all channels (independent cross-check)', _run_5050),
     ]
     # '5050' computes its own independent loss figure (see below) rather
-    # than feeding the ch2/ch4 formula, so it's not required before
-    # "compute & finish" -- ch2/ch4 alone are enough to get a number.
-    required_stages = ['ch2', 'ch4']
+    # than feeding the loop0/loop1 formula, so it's not required before
+    # "compute & finish" -- loop0/loop1 alone are enough to get a number.
+    required_stages = ['loop0', 'loop1']
     runners = {key: run for key, _, run in stage_menu}
 
     def _apply(results):
@@ -748,8 +747,8 @@ def calibrate_loss(run_stages=None):
         """(value, err) for a product of terms**power (power=-1 for a
         division) — relative errors combine in quadrature, valid for any
         chain of independent multiplications/divisions. terms are
-        ((value, err), power) pairs, e.g. combine((C4, 1), (C2, -1)) for
-        C4/C2. None if any input value is zero/None (division by zero)."""
+        ((value, err), power) pairs, e.g. combine((L1, 1), (L0, -1)) for
+        L1/L0. None if any input value is zero/None (division by zero)."""
         if any(not v for (v, _), _ in terms):
             return None, None
         result = 1.0
@@ -758,13 +757,13 @@ def calibrate_loss(run_stages=None):
         rel_sq = sum((p * e / v) ** 2 for (v, e), p in terms)
         return result, abs(result) * rel_sq ** 0.5
 
-    C2, C4 = rate('ch2'), rate('ch4')
-    rates = {'C2': C2[0], 'C2_err': C2[1], 'C4': C4[0], 'C4_err': C4[1]}
+    L0, L1 = rate('loop0'), rate('loop1')
+    rates = {'loop0_hz': L0[0], 'loop0_hz_err': L0[1], 'loop1_hz': L1[0], 'loop1_hz_err': L1[1]}
 
-    # Method 1: ch4 (one loop pass) vs. ch2 (zero loops) -- each stage's
-    # optics deterministically puts ~all the light at one channel, so the
-    # ratio between the two is the per-pass loss directly.
-    loss_per_loop_pass = combine((C4, 1), (C2, -1))
+    # Method 1: loop1 (one loop pass) vs. loop0 (zero loops) -- each
+    # stage's optics deterministically puts ~all the light at one channel,
+    # so the ratio between the two is the per-pass loss directly.
+    loss_per_loop_pass = combine((L1, 1), (L0, -1))
     losses = {
         'loss_per_loop_pass':      loss_per_loop_pass[0],
         'loss_per_loop_pass_err':  loss_per_loop_pass[1],
@@ -1024,8 +1023,9 @@ def _sweep_output_bases(HWP, QWP, N, duration, channel):
 
 
 def _tomo_path1(N, labels, set_input, duration):
-    """ch2 via TOM_1, OUT_2 fixed at the U-angle — the gate output that
-    feeds the loop. Returns {input_label: {output_basis: (count, err)}}."""
+    """The loop's first-tap output (LOOP_CHS[0]) via TOM_1, OUT_2 fixed at
+    the U-angle — the gate output that feeds the loop.
+    Returns {input_label: {output_basis: (count, err)}}."""
     _set_fixed_waveplates(unitaries_angles[N], path=1)
     _beep()
     data = {}
@@ -1042,7 +1042,7 @@ def _tomo_path2(N, labels, set_input, duration, loop=1):
     separate stage pair); getUnitary(path=2) already excludes hf2/qf2 from
     U to match. TOM_1 is fixed at the U-angle for this pass, and dump's
     delay is swapped to DUMP_DELAYS[loop] (loop=1 pairs with path 1's
-    ch2/loop-1 reading) for the duration, then restored.
+    LOOP_CHS[0]/loop-1 reading) for the duration, then restored.
     Returns {input_label: {output_basis: (count, err)}}."""
     _set_fixed_waveplates(unitaries_angles[N], path=2)
     normal_dump_delay = st.CHANNELS[DUMP_CH]['delay']
@@ -1058,6 +1058,24 @@ def _tomo_path2(N, labels, set_input, duration, loop=1):
         st.CHANNELS[DUMP_CH]['delay'] = normal_dump_delay
         print(f"Dump delay restored to {normal_dump_delay} ns")
     return data
+
+
+def tomography_menu():
+    """Entry point for the main menu's tomography option: either a full
+    characterisation sweep (perform_tomo) or a single-point phase-tuning
+    check (check_projector) -- grouped together since both drive the same
+    gate-analysis waveplates, just at different granularity."""
+    choice = input(
+        "Tomography:\n"
+        "\t1. Perform tomography (full sweep + plot)\n"
+        "\t2. Check single input/output projector (phase tuning)\n"
+        "> ").strip()
+    if choice == '1':
+        perform_tomo()
+    elif choice == '2':
+        check_projector()
+    else:
+        print("Invalid choice — pick 1 or 2")
 
 
 def perform_tomo():
@@ -1099,7 +1117,7 @@ def perform_tomo():
 
     path_choice = input(
         "Which path?\n"
-        "\t1. Path 1 only (ch2 via TOM_1)\n"
+        f"\t1. Path 1 only (ch{LOOP_CHS[0]} via TOM_1)\n"
         "\t2. Path 2 only (dump via OUT_2)\n"
         "\t3. Both\n"
         "> ").strip()
@@ -1188,7 +1206,7 @@ def check_projector():
     N = _ask_N()
     path_choice = input(
         "Which path?\n"
-        "\t1. Path 1 (ch2 via TOM_1)\n"
+        f"\t1. Path 1 (ch{LOOP_CHS[0]} via TOM_1)\n"
         "\t2. Path 2 (dump via OUT_2)\n"
         "> ").strip()
     if path_choice not in ('1', '2'):
@@ -1264,6 +1282,15 @@ def ping_antilatch():
     return False
 
 
+def calibrate_background_and_loss():
+    """Background/noise calibration followed by loss calibration, as one
+    menu option -- a measurement's own pre-run check already treats these
+    as one combined step (see _maybe_calibrate/_maybe_calibrate_loss), so
+    there's no reason to make the operator pick them separately here."""
+    calibrate_background()
+    calibrate_loss()
+
+
 def main():
     if SIM_MODE:
         print("[SIM MODE] Running without hardware")
@@ -1274,14 +1301,12 @@ def main():
             "Do you want to:\n"
             "\t1. Set unitary and s0 input state\n"
             "\t2. Collect statistics\n"
-            "\t3. Test antilatch server connection\n"
-            "\t4. Tune channel delays (zooms in to a precise value)\n"
-            "\t5. Unlatch detectors (antilatch only, card untouched)\n"
-            "\t6. Perform tomography (fast characterization sweep + plot)\n"
-            "\t7. Check single input/output projector (phase tuning)\n"
-            "\t8. Calibrate background noise (block/herald/setup, 3 steps)\n"
-            "\t9. Calibrate loss (menu of 7 stages)\n"
-            "\t10. Periodically unlatch detectors (repeats until Ctrl+C)\n"
+            "\t3. Tune channel delays\n"
+            "\t4. Perform tomography\n"
+            "\t5. Calibrate background noise and loss\n"
+            "\t6. Test antilatch server connection\n"
+            "\t7. Unlatch detectors\n"
+            "\t8. Keep detectors unlatched\n"
             )
 
         match n:
@@ -1306,12 +1331,10 @@ def main():
                 else:
                     j = input("Which j? (Enter = 0): ").strip()
                     js = [int(j)] if j else [0]
-                tomo = input("Sweep all 6 analyzer bases for this input "
+                tomo = input("Perform output tomo for this input "
                              "(full collection time each, no plot)? [y/N] ").strip().lower() == 'y'
                 measurement(N, performTomo=tomo, js=js)
             case '3':
-                ping_antilatch()
-            case '4':
                 if SIM_MODE:
                     print("[SIM MODE] delay tuning needs hardware")
                 else:
@@ -1329,7 +1352,13 @@ def main():
                         signal_chs=signal_chs,
                         integration_time=float(t) if t else None,
                     )
+            case '4':
+                tomography_menu()
             case '5':
+                calibrate_background_and_loss()
+            case '6':
+                ping_antilatch()
+            case '7':
                 if SIM_MODE:
                     print("[SIM MODE] no detectors to unlatch")
                 else:
@@ -1338,15 +1367,7 @@ def main():
                     from hardware.detector import reset_detectors
                     if reset_detectors():
                         print("Detectors unlatched (bias voltages cycled)")
-            case '6':
-                perform_tomo()
-            case '7':
-                check_projector()
             case '8':
-                calibrate_background()
-            case '9':
-                calibrate_loss()
-            case '10':
                 if SIM_MODE:
                     print("[SIM MODE] no detectors to unlatch")
                 else:
@@ -1361,14 +1382,17 @@ def main():
                     except KeyboardInterrupt:
                         print("\nPeriodic unlatching stopped.")
             case _:
-                print("Please choose a valid option 1-10 from list:")
+                print("Please choose a valid option 1-8 from list:")
 
 
 if __name__ == "__main__":
     if SIM_MODE:
-        d, row = _scan_and_record(2, center=100.0, span=3.0, step=1.0, n_bins=1, record_bin_s=1.0)
-        assert row['int_time'] == 1.0 and 'coinc_ch2' in row
-        assert len(row['bins']) == 1 and row['bins'][0]['coinc_ch2'] == 0
+        # self-check against a real current channel, not the old pre-shift
+        # ch2 (settings.py: channels moved +2 after ch2 broke on the old card)
+        ch = LOOP_CHS[0]
+        d, row = _scan_and_record(ch, center=100.0, span=3.0, step=1.0, n_bins=1, record_bin_s=1.0)
+        assert row['int_time'] == 1.0 and f'coinc_ch{ch}' in row
+        assert len(row['bins']) == 1 and row['bins'][0][f'coinc_ch{ch}'] == 0
     try:
         main()
     except KeyboardInterrupt:
