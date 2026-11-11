@@ -57,17 +57,20 @@ for _name, _cfg in WAVEPLATES.items():
 # the photon complete all 6 physical loops before dumping, regardless of the
 # nominal process N — the dump's delay is just CHANNELS[7]['delay'], fixed
 # and tuned like any other channel (see tune_delays). See det_chs_for().
+THRESH_CH = 0.05
+THRESH_HER = 0.1
+
 TRIGG_CH = 3
 LOOP_CHS = [2, 4, 6, 8, 10, 12]  # loop 1..6
 DUMP_CH = 7
 CHANNELS = {
-    3:  {'delay': 3841, 'threshold': 0.6},  # herald
-    2:  {'delay': 2972, 'threshold': 0.4},  # loop 1
-    4:  {'delay': 2542, 'threshold': 0.4},  # loop 2
-    6:  {'delay': 2108, 'threshold': 0.4},  # loop 3
-    8:  {'delay': 1676, 'threshold': 0.4},  # loop 4
-    10: {'delay': 1240, 'threshold': 0.4},  # loop 5
-    12: {'delay': 810,  'threshold': 0.4},  # loop 6
+    3:  {'delay': 3841, 'threshold': THRESH_HER},  # herald
+    2:  {'delay': 2956, 'threshold': THRESH_CH},  # loop 1
+    4:  {'delay': 2521, 'threshold': THRESH_CH},  # loop 2
+    6:  {'delay': 2089, 'threshold': THRESH_CH},  # loop 3
+    8:  {'delay': 1656, 'threshold': THRESH_CH},  # loop 4
+    10: {'delay': 1223, 'threshold': THRESH_CH},  # loop 5
+    12: {'delay': 800,  'threshold': THRESH_CH},  # loop 6
     7:  {'delay': 790,  'threshold': 0.2},  # dump — parked at dump-after-6 (DUMP_DELAYS[6])
 }
 # "Dump After" column of the calibration table — dump channel delay if the
@@ -162,4 +165,4 @@ ROUND_ROBIN_THRESHOLD_S = 60 * 60
 ANTILATCH_HOST = '10.126.251.233'  # blue-box PC
 ANTILATCH_PORT = 65201
 ANTILATCH_DEVICE_IDS = [0]
-ANTILATCH_BIAS_VOLTAGES = [{0: 4.27, 1: 4.22, 2: 0.25, 3: 3.6}]
+ANTILATCH_BIAS_VOLTAGES = [{0: 3.5, 1: 0.23, 2: 0, 3: 1.08}]
