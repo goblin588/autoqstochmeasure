@@ -52,7 +52,9 @@ for _name, _cfg in WAVEPLATES.items():
 
 
 # CC CHANNELS: delay (ns) + input threshold (V) per channel.
-# Herald on ch3; loop-k "1" outputs on ch2/4/6/8/10/12; dump on ch7.
+# Herald on ch3; loop-k "1" outputs on ch4/6/8/10/12/14; dump on ch7.
+# Shifted +2 from the original 2/4/6/8/10/12 after ch2 broke on the old card
+# and everything moved down two physical inputs on the replacement.
 # Back to the old method again: every run reads every loop channel and lets
 # the photon complete all 6 physical loops before dumping, regardless of the
 # nominal process N — the dump's delay is just CHANNELS[7]['delay'], fixed
@@ -61,16 +63,16 @@ THRESH_CH = 0.05
 THRESH_HER = 0.1
 
 TRIGG_CH = 3
-LOOP_CHS = [2, 4, 6, 8, 10, 12]  # loop 1..6
+LOOP_CHS = [4, 6, 8, 10, 12, 14]  # loop 1..6
 DUMP_CH = 7
 CHANNELS = {
     3:  {'delay': 3841, 'threshold': THRESH_HER},  # herald
-    2:  {'delay': 2956, 'threshold': THRESH_CH},  # loop 1
-    4:  {'delay': 2521, 'threshold': THRESH_CH},  # loop 2
-    6:  {'delay': 2089, 'threshold': THRESH_CH},  # loop 3
-    8:  {'delay': 1656, 'threshold': THRESH_CH},  # loop 4
-    10: {'delay': 1223, 'threshold': THRESH_CH},  # loop 5
-    12: {'delay': 800,  'threshold': THRESH_CH},  # loop 6
+    4:  {'delay': 2956, 'threshold': THRESH_CH},  # loop 1
+    6:  {'delay': 2521, 'threshold': THRESH_CH},  # loop 2
+    8:  {'delay': 2089, 'threshold': THRESH_CH},  # loop 3
+    10: {'delay': 1656, 'threshold': THRESH_CH},  # loop 4
+    12: {'delay': 1223, 'threshold': THRESH_CH},  # loop 5
+    14: {'delay': 800,  'threshold': THRESH_CH},  # loop 6
     7:  {'delay': 790,  'threshold': 0.2},  # dump — parked at dump-after-6 (DUMP_DELAYS[6])
 }
 # "Dump After" column of the calibration table — dump channel delay if the
@@ -146,10 +148,10 @@ MEASUREMENT_BG_BIN_S = 5.0
 
 # tune_delays' per-channel integration time (s): later loops lose more photons,
 # so their coincidence peak needs longer collection to clear the noise floor.
-# Anchored on ch2 (~1.5 s, plenty of signal) and ch12 (~15 s, barely any left);
+# Anchored on ch4 (~1.5 s, plenty of signal) and ch14 (~15 s, barely any left);
 # the channels between are a linear guess — tune these down/up as real noise
 # is observed. Dump (ch7) isn't a loop step so it just uses the flat fallback.
-TUNE_INTEGRATION_S = {2: 1.5, 4: 4.2, 6: 6.9, 8: 9.6, 10: 12.3, 12: 15.0}
+TUNE_INTEGRATION_S = {4: 1.5, 6: 4.2, 8: 6.9, 10: 9.6, 12: 12.3, 14: 15.0}
 
 # measurement()'s default for longer multi-setting runs: above ROUND_ROBIN_THRESHOLD_S
 # total, settings (state x basis) are interleaved in ROUND_ROBIN_COLLECTION_TIME_S bins

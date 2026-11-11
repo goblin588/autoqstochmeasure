@@ -241,7 +241,7 @@ def tune_delays(
     collection to clear the noise floor. Pass a number to use it for every
     channel instead (e.g. to override a channel missing a clear peak).
 
-    ch2 is scanned first as a reference. After its first (coarsest) scan,
+    ch4 (loop 1) is scanned first as a reference. After its first (coarsest) scan,
     background is measured `background_offset` ns off that peak (averaged
     over `background_samples` reads) and used as the minimum-count bar every
     channel's coarse peak must clear before zooming continues — `min_counts`
@@ -265,7 +265,7 @@ def tune_delays(
     precisely, not for the actual measurement).
     """
     import libraries.settings as st
-    ref_ch = 2 if 2 in signal_chs else signal_chs[0]
+    ref_ch = st.LOOP_CHS[0] if st.LOOP_CHS[0] in signal_chs else signal_chs[0]
     order = [ref_ch, *[ch for ch in signal_chs if ch != ref_ch]]
     min_bar = None
     background = None

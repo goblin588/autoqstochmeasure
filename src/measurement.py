@@ -587,8 +587,8 @@ def calibrate_loss():
         _zero_path2_plates()
         input("\nPlug both herald and signal directly into detectors "
               "(output detector), press Enter when ready...")
-        ch0 = input("Detector channel the bare signal fiber landed on (default 2): ").strip()
-        ch0 = int(ch0) if ch0 else 2
+        ch0 = input("Detector channel the bare signal fiber landed on (default 4): ").strip()
+        ch0 = int(ch0) if ch0 else 4
         delay0, row0 = _scan_and_record(ch0, absolute_range=(0.0, 20.0), step=1.0,
                                          herald_delay=raw_herald_delay)
         print(f"Checking background (herald={raw_herald_delay:.0f}ns, ch @ peak+15ns)...")
@@ -610,11 +610,11 @@ def calibrate_loss():
     def _run_ch2():
         input("\nPlug signal into the setup, press Enter when ready...")
         _set_bypass_optics()
-        return {'ch': 2, 'counts': _record_all_channels()}
+        return {'ch': 4, 'counts': _record_all_channels()}
 
     def _run_ch4():
         _set_loop_optics()
-        return {'ch': 4, 'counts': _record_all_channels()}
+        return {'ch': 6, 'counts': _record_all_channels()}
 
     def _run_dump():
         _set_loop_optics()
@@ -640,8 +640,8 @@ def calibrate_loss():
         prior = stages.get('input', {}).get('delay_ns')
         input("\nLAST STAGE — unplug the signal fiber just before the switch "
               "and plug it directly into a detector, press Enter when ready...")
-        ch_in = input("Detector channel the signal fiber landed on (default 2): ").strip()
-        ch_in = int(ch_in) if ch_in else 2
+        ch_in = input("Detector channel the signal fiber landed on (default 4): ").strip()
+        ch_in = int(ch_in) if ch_in else 4
         # Herald stays at its normal calibrated delay (st.CHANNELS[TRIGG_CH]
         # ~3841ns) — unlike source/source_dump, this tap is still on the
         # setup's usual herald path, only the signal side is ad hoc. The
@@ -658,14 +658,14 @@ def calibrate_loss():
     def _run_ch5050_exit():
         _set_5050_optics()
         input("\n50/50 split — no fiber changes needed. Press Enter when ready...")
-        delay2, row2 = _scan_and_record(2, center=st.CHANNELS[2]['delay'], span=3.0)
-        return {'ch': 2, 'delay_ns': delay2, 'counts': row2}
+        delay2, row2 = _scan_and_record(4, center=st.CHANNELS[4]['delay'], span=3.0)
+        return {'ch': 4, 'delay_ns': delay2, 'counts': row2}
 
     def _run_ch5050_loop():
         _set_5050_optics()
         input("\n50/50 split — no fiber changes needed. Press Enter when ready...")
-        delay4, row4 = _scan_and_record(4, center=st.CHANNELS[4]['delay'], span=3.0)
-        return {'ch': 4, 'delay_ns': delay4, 'counts': row4}
+        delay4, row4 = _scan_and_record(6, center=st.CHANNELS[6]['delay'], span=3.0)
+        return {'ch': 6, 'delay_ns': delay4, 'counts': row4}
 
     stage_menu = [
         ('source', 'Calibrate signal herald (bare source -> output detector)', _run_source),
@@ -1256,7 +1256,7 @@ def main():
                                 f"fixed regardless of process N): ").strip()
                     signal_chs = [int(c) for c in chs.split(',')] if chs else LOOP_CHS
                     t = input("Integration time per point, in seconds "
-                              "(Enter = per-channel default, ch2 ~1.5s up to ch12 ~15s; "
+                              "(Enter = per-channel default, ch4 ~1.5s up to ch14 ~15s; "
                               "or type a number to use it for every channel): ").strip()
                     tune_delays(
                         signal_chs=signal_chs,
