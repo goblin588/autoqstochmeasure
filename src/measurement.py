@@ -217,10 +217,13 @@ def _save_results(rows, N, label, background=None):
     live reference, so rerunning the calibration later can't retroactively
     change what an already-saved measurement recorded.
 
-    loss_calibration is reduced to just each of the 7 stages' {mean_hz,
-    std_hz} under descriptive labels (LOSS_STAGE_LABELS), plus 'file' —
-    the raw per-bin recordings and derived losses stay in calibrate_loss's
-    own file; a measurement's JSON only needs the summary.
+    loss_calibration is reduced to just each stage's {mean_hz, std_hz}
+    under descriptive labels (LOSS_STAGE_LABELS), plus 'file' — the raw
+    per-bin recordings and derived losses stay in calibrate_loss's own
+    file; a measurement's JSON only needs the summary. ch2/ch4 each have
+    one representative channel; '5050' doesn't (it records every loop
+    channel in one go), so its summary is {ch: {mean_hz, std_hz}} per
+    channel instead of a single rate.
 
     Timestamp leads so filenames sort most-recent-last (ls default order).
     Called from finally — saves whatever rows exist even mid-sweep.
@@ -245,9 +248,13 @@ def _save_results(rows, N, label, background=None):
     loss_cal_path, loss_cal = _find_latest_loss_calibration()
     loss_calibration = None
     if loss_cal_path:
+        def _stage_summary(stage):
+            if 'ch' in stage:
+                return dict(zip(('mean_hz', 'std_hz'), _bin_rate_mean_std(stage['counts'], stage['ch'])))
+            return {str(ch): dict(zip(('mean_hz', 'std_hz'), _bin_rate_mean_std(stage['counts'], ch)))
+                    for ch in st.LOOP_CHS}
         stages = {
-            LOSS_STAGE_LABELS[key]: dict(zip(('mean_hz', 'std_hz'),
-                                              _bin_rate_mean_std(stage['counts'], stage['ch'])))
+            LOSS_STAGE_LABELS[key]: _stage_summary(stage)
             for key, stage in loss_cal.get('stages', {}).items()
         }
         loss_calibration = {'file': loss_cal_path.name, 'stages': stages}
