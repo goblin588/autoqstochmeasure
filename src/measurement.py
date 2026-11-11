@@ -428,15 +428,17 @@ def _zero_path2_plates():
 
 def _set_bypass_optics():
     """Zero loops, all exit: input H, IN_2 parked at 0 (no ring coupling),
-    HWP_12/QWP_12 at 22.5°/0° routes everything straight out the exit
-    port. Fully automated — no manual switch/plate step needed. Sets
-    everything this stage depends on — self-contained so it's safe to run
-    even if an earlier stage was skipped via resume."""
+    HWP_12/QWP_12 at 45°/0° routes everything straight out the exit
+    port (22.5 would split H into D, sending only half out the exit --
+    see tests/test_loop_exit_split.py). Fully automated — no manual
+    switch/plate step needed. Sets everything this stage depends on --
+    self-contained so it's safe to run even if an earlier stage was
+    skipped via resume."""
     _set_input_basis('H')
     _zero_path2_plates()
-    print("Setting HWP_12/QWP_12 to 22.5°/0° (zero-loop, all exit)")
+    print("Setting HWP_12/QWP_12 to 45°/0° (zero-loop, all exit)")
     tl.move_stage(QWP_12, 0, COMPORT)
-    tl.move_stage(HWP_12, 22.5, COMPORT)
+    tl.move_stage(HWP_12, 45, COMPORT)
 
 
 def _set_loop_optics():
@@ -475,6 +477,58 @@ def _set_5050_optics():
     tl.move_stage(HWP_1, 0, COMPORT)
     tl.move_stage(QWP_12, 0, COMPORT)
     tl.move_stage(HWP_12, 22.5, COMPORT)
+
+
+def _set_loop3_optics():
+    """Peaks the exit probability at the 3rd loop pass (st.LOOP_CHS[2]) --
+    43.8% of the photon exits there, vs. 32.1%/14.3% leaking out at loop
+    passes 2/4 (the rest is residual beyond 6 loops). For use when tuning
+    that channel's delay specifically: much stronger signal there than the
+    fast falloff you'd get leaving the optics on a U_N process preset.
+
+    Unlike _set_bypass_optics/_set_loop_optics (exact, closed-form 0- and
+    1-loop solutions), this is the best configuration found by numerically
+    optimizing h1/q1/h2/q2/hf2/qf2 and the input state over the per-pass
+    loop model (PBS -> coin -> fixed mirror phase -> PBS_dag -> OUT_2),
+    with the mirror phase pinned to the real hardware value (m1+m2+m3 =
+    3.16+3.77+3.74, same as every U_N preset) since it isn't a motorized
+    stage. Not yet confirmed on the bench."""
+    print("Setting HWP_IN/QWP_IN to 93.445°/85.188° (loop-3-peaking input state)")
+    tl.move_stage(HWP_IN, 93.445, COMPORT)
+    tl.move_stage(QWP_IN, 85.188, COMPORT)
+    print("Setting HWP_IN_2/QWP_IN_2 to 0°/0°")
+    tl.move_stage(HWP_IN_2, 0, COMPORT)
+    tl.move_stage(QWP_IN_2, 0, COMPORT)
+    print("Setting HWP_1/QWP_1 to 142.430°/166.820°, HWP_12/QWP_12 to 89.998°/179.998°")
+    tl.move_stage(HWP_1, 142.430, COMPORT)
+    tl.move_stage(QWP_1, 166.820, COMPORT)
+    tl.move_stage(HWP_12, 89.998, COMPORT)
+    tl.move_stage(QWP_12, 179.998, COMPORT)
+    print("Setting HWP_OUT_2/QWP_OUT_2 to 133.803°/33.989°")
+    tl.move_stage(HWP_OUT_2, 133.803, COMPORT)
+    tl.move_stage(QWP_OUT_2, 33.989, COMPORT)
+
+
+def _set_loop4_optics():
+    """Peaks the exit probability at the 4th loop pass (st.LOOP_CHS[3]) --
+    30.1% of the photon exits there, vs. 28.9%/16.2% at loop passes 3/5
+    (close to loop 3's share, but still the highest of the six). Same
+    derivation and caveat as _set_loop3_optics -- optimizer-found, not an
+    exact solution, not yet confirmed on the bench."""
+    print("Setting HWP_IN/QWP_IN to 131.788°/99.785° (loop-4-peaking input state)")
+    tl.move_stage(HWP_IN, 131.788, COMPORT)
+    tl.move_stage(QWP_IN, 99.785, COMPORT)
+    print("Setting HWP_IN_2/QWP_IN_2 to 0°/0°")
+    tl.move_stage(HWP_IN_2, 0, COMPORT)
+    tl.move_stage(QWP_IN_2, 0, COMPORT)
+    print("Setting HWP_1/QWP_1 to 0.000°/90.002°, HWP_12/QWP_12 to 67.617°/6.486°")
+    tl.move_stage(HWP_1, 0.000, COMPORT)
+    tl.move_stage(QWP_1, 90.002, COMPORT)
+    tl.move_stage(HWP_12, 67.617, COMPORT)
+    tl.move_stage(QWP_12, 6.486, COMPORT)
+    print("Setting HWP_OUT_2/QWP_OUT_2 to 1.512°/117.523°")
+    tl.move_stage(HWP_OUT_2, 1.512, COMPORT)
+    tl.move_stage(QWP_OUT_2, 117.523, COMPORT)
 
 
 def calibrate_loss():
