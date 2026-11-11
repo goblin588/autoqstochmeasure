@@ -6,6 +6,7 @@ Run with AUTOTOMO_SIM=1 or --sim for mock hardware.
 """
 import csv
 import json
+import math
 import os
 import socket
 import statistics
@@ -92,16 +93,6 @@ def _set_unitary(N):
     _beep()
     print("UNITARY READY")
 
-def _remind_switch_dwell(N):
-    """Switch dwell is a manual hardware setting, not something this program
-    can drive — print the calibrated value (SWITCH_DWELL column) for process
-    N so the operator sets it before counting starts."""
-    dwell = st.SWITCH_DWELL_NS.get(int(N))
-    if dwell is None:
-        print(f"Set switch dwell manually for N={N} (not calibrated yet)")
-    else:
-        print(f"Set switch dwell to {dwell} ns (N={N})")
-
 def _set_tomo_stages(HWP, QWP, basis):
     """ For tomo ordering QWP -> HWP """
     tl.move_stage(HWP, tomo_angles[basis][0], COMPORT)
@@ -153,19 +144,46 @@ def _bin_rate_mean_std(counts, ch):
     return mean_rate, std_rate
 
 
-# Descriptive labels for calibrate_loss's 6 stage keys, used wherever a
+def _fit_loop_decay(counts, loop_chs=None):
+    """Fit log(rate) vs. loop-pass-index (1..6) across every loop channel in
+    one _record_all_channels() recording. Returns (ratio_per_pass,
+    ratio_err): the measured channel-to-channel count ratio, e.g. ~0.5x the
+    real per-pass loss under the 50/50 optics (ideal, lossless 50/50 would
+    give exactly 0.5 -- the shortfall below that is the loss).
+
+    Plain least-squares, no numpy -- a straight line through <=6 points
+    doesn't need it. None if fewer than 2 channels have a nonzero rate."""
+    points = []
+    for k, ch in enumerate(loop_chs if loop_chs is not None else st.LOOP_CHS, start=1):
+        mean_rate, _ = _bin_rate_mean_std(counts, ch)
+        if mean_rate > 0:
+            points.append((float(k), math.log(mean_rate)))
+    if len(points) < 2:
+        return None, None
+    n = len(points)
+    kbar = sum(k for k, _ in points) / n
+    ybar = sum(y for _, y in points) / n
+    sxx = sum((k - kbar) ** 2 for k, _ in points)
+    sxy = sum((k - kbar) * (y - ybar) for k, y in points)
+    slope = sxy / sxx
+    ratio = math.exp(slope)
+    if n > 2:
+        resid_sq = sum((y - (ybar + slope * (k - kbar))) ** 2 for k, y in points)
+        s_err = (resid_sq / (n - 2)) ** 0.5
+        slope_err = s_err / sxx ** 0.5
+        ratio_err = ratio * slope_err
+    else:
+        ratio_err = 0.0
+    return ratio, ratio_err
+
+
+# Descriptive labels for calibrate_loss's 3 stage keys, used wherever a
 # stage summary is shown to a human or embedded in a measurement's JSON —
-# the raw keys (ch2/ch4/dump/input) read as unlabelled channel numbers.
+# the raw keys (ch2/ch4) read as unlabelled channel numbers.
 LOSS_STAGE_LABELS = {
-    'source':           'source_output',
-    'source_dump':      'source_dump_output',
-    'ch2':              'zero_loop_output',
-    'ch4':              'one_loop',
-    'dump':             'one_loop_dump',
-    'straight_to_dump': 'zero_loop_dump',
-    'input':            'input_counts',
-    'ch5050_exit':      'fifty_fifty_exit',
-    'ch5050_loop':      'fifty_fifty_loop',
+    'ch2':   'zero_loop_output',
+    'ch4':   'one_loop',
+    '5050':  'fifty_fifty_all_channels',
 }
 
 
@@ -387,22 +405,6 @@ def _scan_and_record(ch, **kwargs):
     return scan_and_record(ch, **kwargs)
 
 
-def _coarse_scan(ch, **kwargs):
-    """SIM-guarded wrapper around countingcard.coarse_scan."""
-    if SIM_MODE:
-        return kwargs.get('start', 0.0)
-    from libraries.countingcard import coarse_scan
-    return coarse_scan(ch, **kwargs)
-
-
-def _measure_background(ch, **kwargs):
-    """SIM-guarded wrapper around countingcard.measure_background."""
-    if SIM_MODE:
-        return 0.0, {}
-    from libraries.countingcard import measure_background
-    return measure_background(ch, **kwargs)
-
-
 def _find_latest_loss_calibration():
     """Most recent data/*_loss_calibration.json, parsed — or (None, {}) if
     none exist yet. Same glob/mtime pattern as _latest_calibration()."""
@@ -531,71 +533,37 @@ def _set_loop4_optics():
     tl.move_stage(QWP_OUT_2, 117.523, COMPORT)
 
 
-def calibrate_loss():
-    """Menu-driven loss calibration over 7 stages:
-      source       source baseline, signal straight to the output detector      -> C0
-      source_dump  source baseline, signal straight to the DUMP detector        -> C0_dump
-      ch2          zero-loop bypass, signal into setup, exits without looping   -> C_ch2
-      ch4          one loop pass, exits via the normal loop-output port         -> C_ch4
-      dump         one loop pass, switch diverts to the dump port/detector      -> C_dump
-      straight_to_dump  zero loop, switch set to 'man' straight to dump port   -> C_sdump
-      input        signal after input prep, tapped right before the switch     -> C_in
+def calibrate_loss(run_stages=None):
+    """Menu-driven loss calibration over 3 stages, all fully automated (no
+    fiber replugging — safe to run unattended/queued):
+      ch2    zero-loop bypass, signal into setup, exits without looping -> C_ch2
+      ch4    one loop pass, exits via the normal loop-output port       -> C_ch4
+      5050   50/50 split optics, one recording across every loop channel
 
-    source/source_dump are both raw, setup-free baselines (herald+signal
-    direct to a detector) — one through the output detector, one through the
-    dump detector — since the two are physically different detectors and may
-    not share a detection efficiency. Each is followed by a background
-    check at that stage's found peak delay +15ns (same BACKGROUND_OFFSET_NS
-    convention as calibrate_background/tune_delays), far enough off the
-    real peak to see how much of C0/C0_dump is accidental floor rather than
-    real coincidences.
+    (Previously also had source/source_dump/dump/straight_to_dump/input
+    stages for det_eff_dump/loss_input_to_setup/loss_to_dump — dropped along
+    with those stages since they needed physically unplugging fibers, which
+    rules out unattended use.)
 
-    Every stage's peak recording (and the background check) is 20 x 5s
-    bins rather than one long read — the per-bin counts are kept on file,
-    and losses/rates are reported as mean +/- SEM (std/sqrt(20)), with
-    errors propagated through each ratio (relative errors combine in
-    quadrature). Every losses/rates key has an "_err" companion.
+    Every stage's peak recording is 20 x 5s bins rather than one long read —
+    the per-bin counts are kept on file, and losses/rates are reported as
+    mean +/- SEM (std/sqrt(20)), with errors propagated through the ratio
+    (relative errors combine in quadrature). Every losses/rates key has an
+    "_err" companion.
 
-    straight_to_dump and input both search for their delay the same way,
-    since neither has a pre-calibrated center to scan around: herald stays
-    at its normal calibrated delay (~3841ns, st.CHANNELS[TRIGG_CH]) — unlike
-    source/source_dump, both taps are still on the setup's usual herald
-    path, only the signal side differs. The signal photon arrives sooner
-    than via the full loop path, so its matching delay sits below the
-    herald's. First time, a cheap coarse_scan counts down from the herald's
-    delay to locate the approximate peak (stopping early once counts drop
-    under 1/5 of the running max, rather than scanning all the way to 0);
-    every time after, the delay found last time is reused directly. Either
-    way, a +/-10ns scan_and_record fine sweep around that point finds and
-    records the real peak (its own edge-resweep still applies within that).
-
-    straight_to_dump is the zero-loop counterpart to dump: same bypass
-    optics as ch2 (input H, path-2 plates parked at 0), but the switch is
-    manually set to 'man' so the signal goes straight to the dump port/
-    detector instead of looping. Measured on st.DUMP_CH.
-
-    input taps the signal right before it enters the switch (after the
-    usual input-prep waveplates) — an ad hoc connection like source/
-    source_dump. Run this stage LAST — unplugging the fiber to tap it
-    disturbs the polarisation for anything downstream.
-
-    Returns/reports five quantities:
-      det_eff_setup       reference efficiency, fixed at 1.0
-      det_eff_dump        dump detector's efficiency relative to the setup
-                           detector = C0_dump/C0 (both stages share the same
-                           bare-source input, so this isolates the two
-                           detectors' relative efficiency)
-      loss_input_to_setup input-to-loop coupling loss = C_ch2/C_in
-      loss_per_loop_pass  = C_ch4/C_ch2 — isolates one stage's loss by
-                           dividing out everything upstream of it, since
-                           every rate here already carries the same
-                           input-coupling loss
-      loss_to_dump         one-loop-then-dump vs. straight-to-dump, isolating
-                           the loop pass's contribution to the dump path the
-                           same way loss_per_loop_pass isolates it for the
-                           output path = C_dump/C_sdump. Both are already on
-                           the same dump detector, so unlike loss_per_loop_pass
-                           no det_eff normalisation is needed.
+    Returns/reports loss_per_loop_pass by two independent methods, so they
+    can be checked against each other:
+      loss_per_loop_pass      = C_ch4/C_ch2 — ch2/ch4's optics each put ~all
+                           the light deterministically at one channel, so
+                           the ratio between the two stages is the per-pass
+                           loss directly.
+      loss_per_loop_pass_5050 = the 50/50 stage's channel-to-channel count
+                           decay (fit across all 6 channels at once, see
+                           _fit_loop_decay), divided by the known 0.5
+                           lossless-case ratio. Same physical quantity, a
+                           completely different optics config and
+                           measurement — if the two disagree by more than
+                           their error bars, something's off.
 
     Stages are picked from a menu, in any order, any number of times — not a
     fixed sequence. Each menu entry shows when it was last done. Saves after
@@ -603,15 +571,15 @@ def calibrate_loss():
     If a previous (possibly interrupted) run's file exists, its stages are
     loaded so they show up as already-done and count toward the final loss
     computation without being re-run. Finishing computes losses from
-    whichever stages are on file — pick "compute & finish" once all 7 show a
-    done date.
-    """
-    # Stages source/source_dump are a bare source->detector connection, not
-    # the setup's usual fiber path — the calibrated herald delay (~3841ns,
-    # tuned for that usual path) doesn't apply here, so both the peak search
-    # and the background check pin herald to this instead.
-    raw_herald_delay = 10.0
+    whichever stages are on file — pick "compute & finish" once ch2/ch4 show
+    a done date.
 
+    run_stages: a list of stage keys (e.g. ['ch2']) to run non-interactively
+    instead of showing the menu -- for unattended/queued use. Still falls
+    through to "compute & finish" afterward, so calling this once per stage
+    across separate queue steps resumes/accumulates via the loss-calibration
+    file exactly like the interactive menu does.
+    """
     path, existing = _find_latest_loss_calibration()
     stages = dict(existing.get('stages', {}))
     if stages:
@@ -637,32 +605,7 @@ def calibrate_loss():
         print(f"  (saved -> {path.name})")
         return meta
 
-    def _run_source():
-        _zero_path2_plates()
-        input("\nPlug both herald and signal directly into detectors "
-              "(output detector), press Enter when ready...")
-        ch0 = input(f"Detector channel the bare signal fiber landed on (default {st.LOOP_CHS[0]}): ").strip()
-        ch0 = int(ch0) if ch0 else st.LOOP_CHS[0]
-        delay0, row0 = _scan_and_record(ch0, absolute_range=(0.0, 20.0), step=1.0,
-                                         herald_delay=raw_herald_delay)
-        print(f"Checking background (herald={raw_herald_delay:.0f}ns, ch @ peak+15ns)...")
-        bg0, bg0_point = _measure_background(ch0, peak_delay=delay0, herald_delay=raw_herald_delay)
-        return {'ch': ch0, 'delay_ns': delay0, 'counts': row0,
-                'background_hz': bg0, 'background_point': bg0_point}
-
-    def _run_source_dump():
-        _zero_path2_plates()
-        input("\nPlug signal directly into the DUMP detector "
-              "(herald stays connected), press Enter when ready...")
-        delay0d, row0d = _scan_and_record(st.DUMP_CH, absolute_range=(0.0, 20.0), step=1.0,
-                                           herald_delay=raw_herald_delay)
-        print(f"Checking background (herald={raw_herald_delay:.0f}ns, ch @ peak+15ns)...")
-        bg0d, bg0d_point = _measure_background(st.DUMP_CH, peak_delay=delay0d, herald_delay=raw_herald_delay)
-        return {'ch': st.DUMP_CH, 'delay_ns': delay0d, 'counts': row0d,
-                'background_hz': bg0d, 'background_point': bg0d_point}
-
     def _run_ch2():
-        input("\nPlug signal into the setup, press Enter when ready...")
         _set_bypass_optics()
         return {'ch': st.LOOP_CHS[0], 'counts': _record_all_channels()}
 
@@ -670,92 +613,50 @@ def calibrate_loss():
         _set_loop_optics()
         return {'ch': st.LOOP_CHS[1], 'counts': _record_all_channels()}
 
-    def _run_dump():
-        _set_loop_optics()
-        input("\nSet the switch to dump after 1 loop, dwell 60 ns, "
-              "press Enter when ready...")
-        delay7, row7 = _scan_and_record(st.DUMP_CH, center=st.DUMP_DELAYS[1], span=3.0)
-        return {'ch': st.DUMP_CH, 'delay_ns': delay7, 'counts': row7}
-
-    def _run_straight_to_dump():
-        prior = stages.get('straight_to_dump', {}).get('delay_ns')
-        _set_input_basis('H')
-        _zero_path2_plates()
-        input("\nSet switch to 'man' (straight to dump, no loop), press Enter when ready...")
-        herald_delay_normal = st.CHANNELS[TRIGG_CH]['delay']
-        if prior is None:
-            print(f"No prior delay on file — coarse-scanning down from the herald's "
-                  f"{herald_delay_normal:.0f}ns delay to locate the peak...")
-            prior = _coarse_scan(st.DUMP_CH, start=herald_delay_normal, stop=0.0)
-        delay_sd, row_sd = _scan_and_record(st.DUMP_CH, center=prior, span=10.0, step=1.0)
-        return {'ch': st.DUMP_CH, 'delay_ns': delay_sd, 'counts': row_sd}
-
-    def _run_input():
-        prior = stages.get('input', {}).get('delay_ns')
-        input("\nLAST STAGE — unplug the signal fiber just before the switch "
-              "and plug it directly into a detector, press Enter when ready...")
-        ch_in = input(f"Detector channel the signal fiber landed on (default {st.LOOP_CHS[0]}): ").strip()
-        ch_in = int(ch_in) if ch_in else st.LOOP_CHS[0]
-        # Herald stays at its normal calibrated delay (st.CHANNELS[TRIGG_CH]
-        # ~3841ns) — unlike source/source_dump, this tap is still on the
-        # setup's usual herald path, only the signal side is ad hoc. The
-        # signal photon arrives sooner here than via the full loop path, so
-        # its matching delay sits below the herald's — scan down from there.
-        herald_delay_normal = st.CHANNELS[TRIGG_CH]['delay']
-        if prior is None:
-            print(f"No prior delay on file — coarse-scanning down from the herald's "
-                  f"{herald_delay_normal:.0f}ns delay to locate the peak...")
-            prior = _coarse_scan(ch_in, start=herald_delay_normal, stop=0.0)
-        delay_in, row_in = _scan_and_record(ch_in, center=prior, span=10.0, step=1.0)
-        return {'ch': ch_in, 'delay_ns': delay_in, 'counts': row_in}
-
-    def _run_ch5050_exit():
+    def _run_5050():
+        """50/50 optics, one recording across every loop channel at once --
+        the loss-per-pass estimate comes from fitting how fast counts decay
+        channel-to-channel (see _fit_loop_decay), not from any single
+        channel in isolation."""
         _set_5050_optics()
-        input("\n50/50 split — no fiber changes needed. Press Enter when ready...")
-        exit_ch = st.LOOP_CHS[0]
-        delay2, row2 = _scan_and_record(exit_ch, center=st.CHANNELS[exit_ch]['delay'], span=3.0)
-        return {'ch': exit_ch, 'delay_ns': delay2, 'counts': row2}
-
-    def _run_ch5050_loop():
-        _set_5050_optics()
-        input("\n50/50 split — no fiber changes needed. Press Enter when ready...")
-        loop_ch = st.LOOP_CHS[1]
-        delay4, row4 = _scan_and_record(loop_ch, center=st.CHANNELS[loop_ch]['delay'], span=3.0)
-        return {'ch': loop_ch, 'delay_ns': delay4, 'counts': row4}
+        return {'counts': _record_all_channels()}
 
     stage_menu = [
-        ('source', 'Calibrate signal herald (bare source -> output detector)', _run_source),
-        ('source_dump', 'Calibrate herald dump (bare source -> dump detector)', _run_source_dump),
         ('ch2', 'Zero-loop bypass (signal into setup, no loop)', _run_ch2),
         ('ch4', 'One loop pass (normal loop-output port)', _run_ch4),
-        ('ch5050_exit', '50/50 split - exit channel (ch2)', _run_ch5050_exit),
-        ('ch5050_loop', '50/50 split - loop channel (ch4)', _run_ch5050_loop),
-        ('dump', 'Loop then dump', _run_dump),
-        ('straight_to_dump', "Straight to dump (zero-loop, switch set to 'man')", _run_straight_to_dump),
-        ('input', 'Input into switch (LAST — disturbs polarisation)', _run_input),
+        ('5050', '50/50 split, all channels (independent cross-check)', _run_5050),
     ]
-    # ch5050_* aren't fed into the loss formulas below (they're there to
-    # directly observe the real 50/50 split on hardware) so they're not
-    # required before "compute & finish".
-    required_stages = [key for key, _, _ in stage_menu if not key.startswith('ch5050')]
+    # '5050' computes its own independent loss figure (see below) rather
+    # than feeding the ch2/ch4 formula, so it's not required before
+    # "compute & finish" -- ch2/ch4 alone are enough to get a number.
+    required_stages = ['ch2', 'ch4']
+    runners = {key: run for key, _, run in stage_menu}
 
-    while True:
-        print("\nLoss calibration stages:")
-        for i, (key, label, _) in enumerate(stage_menu, 1):
-            when = stages.get(key, {}).get('saved_at', 'never')
-            print(f"\t{i}. {label} (last done {when})")
-        choice = input("\t0. Compute losses & finish\n> ").strip()
-        if choice == '0':
-            break
-        try:
-            key, _, run = stage_menu[int(choice) - 1]
-        except (ValueError, IndexError):
-            print("Enter a number from the menu")
-            continue
-        result = run()
-        result['saved_at'] = datetime.datetime.now().isoformat()
-        stages[key] = result
-        _save()
+    if run_stages is not None:
+        for key in run_stages:
+            print(f"\nRunning loss-calibration stage: {key}")
+            result = runners[key]()
+            result['saved_at'] = datetime.datetime.now().isoformat()
+            stages[key] = result
+            _save()
+    else:
+        while True:
+            print("\nLoss calibration stages:")
+            for i, (key, label, _) in enumerate(stage_menu, 1):
+                when = stages.get(key, {}).get('saved_at', 'never')
+                print(f"\t{i}. {label} (last done {when})")
+            choice = input("\t0. Compute losses & finish\n> ").strip()
+            if choice == '0':
+                break
+            try:
+                key, _, run = stage_menu[int(choice) - 1]
+            except (ValueError, IndexError):
+                print("Enter a number from the menu")
+                continue
+            result = run()
+            result['saved_at'] = datetime.datetime.now().isoformat()
+            stages[key] = result
+            _save()
 
     missing = [key for key in required_stages if key not in stages]
     if missing:
@@ -778,8 +679,8 @@ def calibrate_loss():
         """(value, err) for a product of terms**power (power=-1 for a
         division) — relative errors combine in quadrature, valid for any
         chain of independent multiplications/divisions. terms are
-        ((value, err), power) pairs, e.g. combine((C2, 1), (Cin, -1)) for
-        C2/Cin. None if any input value is zero/None (division by zero)."""
+        ((value, err), power) pairs, e.g. combine((C4, 1), (C2, -1)) for
+        C4/C2. None if any input value is zero/None (division by zero)."""
         if any(not v for (v, _), _ in terms):
             return None, None
         result = 1.0
@@ -788,40 +689,37 @@ def calibrate_loss():
         rel_sq = sum((p * e / v) ** 2 for (v, e), p in terms)
         return result, abs(result) * rel_sq ** 0.5
 
-    C0, C0d, C2, C4, Cd, Csd, Cin = (rate('source'), rate('source_dump'), rate('ch2'),
-                                     rate('ch4'), rate('dump'), rate('straight_to_dump'),
-                                     rate('input'))
-    rates = {
-        'C0': C0[0], 'C0_err': C0[1], 'C0d': C0d[0], 'C0d_err': C0d[1],
-        'C2': C2[0], 'C2_err': C2[1], 'C4': C4[0], 'C4_err': C4[1],
-        'Cd': Cd[0], 'Cd_err': Cd[1], 'Csd': Csd[0], 'Csd_err': Csd[1],
-        'Cin': Cin[0], 'Cin_err': Cin[1],
-    }
+    C2, C4 = rate('ch2'), rate('ch4')
+    rates = {'C2': C2[0], 'C2_err': C2[1], 'C4': C4[0], 'C4_err': C4[1]}
 
-    det_eff_dump = combine((C0d, 1), (C0, -1))
-    input_loss = combine((C2, 1), (Cin, -1))
+    # Method 1: ch4 (one loop pass) vs. ch2 (zero loops) -- each stage's
+    # optics deterministically puts ~all the light at one channel, so the
+    # ratio between the two is the per-pass loss directly.
     loss_per_loop_pass = combine((C4, 1), (C2, -1))
-    # Both Cd and Csd are on the dump detector, so no det_eff normalisation
-    # is needed — one-loop-then-dump vs. straight-to-dump isolates the loop
-    # pass's own loss for the dump path.
-    loss_to_dump = combine((Cd, 1), (Csd, -1))
     losses = {
-        'det_eff_setup':           1.0,
-        'det_eff_setup_err':       0.0,
-        'det_eff_dump':            det_eff_dump[0],
-        'det_eff_dump_err':        det_eff_dump[1],
-        'loss_input_to_setup':     input_loss[0],
-        'loss_input_to_setup_err': input_loss[1],
         'loss_per_loop_pass':      loss_per_loop_pass[0],
         'loss_per_loop_pass_err':  loss_per_loop_pass[1],
-        'loss_to_dump':            loss_to_dump[0],
-        'loss_to_dump_err':        loss_to_dump[1],
     }
+
+    # Method 2: under the 50/50 optics, every pass splits whatever's left
+    # exactly 50/50 (by construction, see _set_5050_optics) -- so with zero
+    # loss, consecutive loop channels' counts would decay by exactly 0.5x.
+    # Fitting the *actual* decay across all 6 channels at once and dividing
+    # out that known 0.5x isolates the real per-pass loss -- an independent
+    # cross-check against method 1 (same physical quantity, different
+    # optics config and a different measurement entirely).
+    if '5050' in stages:
+        decay_ratio, decay_ratio_err = _fit_loop_decay(stages['5050']['counts'])
+        if decay_ratio is not None:
+            losses['loss_per_loop_pass_5050'] = decay_ratio / 0.5
+            losses['loss_per_loop_pass_5050_err'] = decay_ratio_err / 0.5
+
     meta = _save(losses=losses, rates=rates)
     print(f"\nSaved -> {path}")
     print(f"losses: {losses}")
     notify("Loss calibration done", title="Calibration Complete")
     return meta
+
 
 
 def _maybe_calibrate():
@@ -895,7 +793,7 @@ def _round_robin_plan(settings, total, bin_s):
             remaining[s] -= chunk
 
 
-def measurement(N, performTomo=False, js=None):
+def measurement(N, performTomo=False, js=None, duration_s=None, auto=False):
     """Collect statistics through unitary N, one row per st.MEASUREMENT_INTEGRATION_S seconds.
 
     performTomo=False : collect at the current analyzer setting
@@ -917,22 +815,35 @@ def measurement(N, performTomo=False, js=None):
     accidental-coincidence reading per run, not just a pointer to whichever
     separate noise_calibration happened to be most recent.
 
+    auto=True skips every interactive prompt (duration confirmation and the
+    offer to re-run background calibration) for unattended/queued use --
+    duration_s must be given then (None streams until Ctrl-C, same meaning
+    as the interactive default's 0).
+
     Returns the list of result rows so callers can aggregate.
     """
-    _maybe_calibrate()
+    if auto:
+        if _latest_calibration() is None:
+            calibrate_background()
+    else:
+        _maybe_calibrate()
 
     js = js if js is not None else [0]
     bases = ['H', 'V', 'A', 'D', 'R', 'L'] if performTomo else [None]
     settings = [(j, b) for j in js for b in bases]
 
-    while True:
-        total = _ask_duration()
+    if auto:
+        total = duration_s
         round_robin = _should_round_robin(total, len(settings))
-        if total is None:
-            break
-        print(f"This measurement will take {_format_duration(total * len(settings))}.")
-        if input("Press Enter to begin, or c to change the duration: ").strip().lower() != 'c':
-            break
+    else:
+        while True:
+            total = _ask_duration()
+            round_robin = _should_round_robin(total, len(settings))
+            if total is None:
+                break
+            print(f"This measurement will take {_format_duration(total * len(settings))}.")
+            if input("Press Enter to begin, or c to change the duration: ").strip().lower() != 'c':
+                break
 
     print(f"Measuring background (+{st.MEASUREMENT_BG_OFFSET_NS:.0f}ns off tuned delays, "
           f"{st.MEASUREMENT_BG_N_BINS} x {st.MEASUREMENT_BG_BIN_S:.0f}s bins)...")
@@ -940,7 +851,6 @@ def measurement(N, performTomo=False, js=None):
     print(f"  {background}")
 
     _set_unitary(N)
-    _remind_switch_dwell(N)
     start = time.monotonic()
 
     rows = []

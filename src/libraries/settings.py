@@ -86,13 +86,6 @@ CHANNELS = {
 # the ~430 ns/loop step seen in 0-5.
 DUMP_DELAYS = {0: 3390, 1: 2954, 2: 2523, 3: 2088, 4: 1656, 5: 1223, 6: 790}
 
-# "Switch Dwell" column — the photon switch's dwell time isn't under this
-# program's control, so this is just what to tell the operator to set it to
-# by hand before a measurement at process N starts (see measurement()'s
-# reminder print). No entry (or "man"/blank in the table) = set manually,
-# no calibrated number yet.
-SWITCH_DWELL_NS = {2: 125, 3: 210, 4: 300, 5: 390, 6: 480}
-
 THRESHOLDS = {ch: cfg['threshold'] for ch, cfg in CHANNELS.items()}
 
 # Tuned delays saved by countingcard.tune_delays override the defaults above.

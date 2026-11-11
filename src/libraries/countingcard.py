@@ -225,6 +225,7 @@ def tune_delays(
     experiment_window: float = 1.5,
     windows: tuple = TUNE_WINDOWS_NS,
     small_window_ns: float = 0.5,
+    auto_save: bool = False,
 ):
     """Re-centre each signal channel's delay after drift, converging to a
     precise value by zooming in: scan ±span ns in `step` ns moves at the
@@ -263,6 +264,9 @@ def tune_delays(
     The session's coincidence window is left at `experiment_window` ns
     (the tight window used for tuning is only for locating the delay
     precisely, not for the actual measurement).
+
+    auto_save=True persists straight to calibration.json without asking --
+    for unattended/queued use.
     """
     import libraries.settings as st
     ref_ch = st.LOOP_CHS[0] if st.LOOP_CHS[0] in signal_chs else signal_chs[0]
@@ -362,6 +366,9 @@ def tune_delays(
         print(f"  ch{ch}: {before:.0f} ns -> {after:.2f} ns{note}")
     if not changes:
         print("Nothing tuned yet — nothing to save.")
+        return
+    if auto_save:
+        st.save_calibration()
         return
     prompt = "Save the delays found so far as new defaults? [y/N] " if interrupted \
         else "Save tuned delays as new defaults? [y/N] "
