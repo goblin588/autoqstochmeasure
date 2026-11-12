@@ -989,8 +989,11 @@ def measurement(N, performTomo=False, js=None, duration_s=None, auto=False):
 
 
 def _ask_N():
+    """Returns the chosen N, or None if the operator typed 0/back."""
     while True:
-        N = input(f"Which unitary N? ({'/'.join(unitaries_angles)}): ").strip()
+        N = input(f"Which unitary N? ({'/'.join(unitaries_angles)}, or 0/back): ").strip()
+        if _is_back(N):
+            return None
         if N in unitaries_angles:
             return N
         print("Invalid unitary choice")
@@ -1060,6 +1063,16 @@ def _tomo_path2(N, labels, set_input, duration, loop=1):
     return data
 
 
+_BACK = ('0', 'back')
+
+
+def _is_back(choice):
+    """True for '0' or 'back' (any case) -- every menu that leads to
+    another menu accepts either to return to the one that called it,
+    instead of forcing Ctrl-C or a full workflow."""
+    return choice.strip().lower() in _BACK
+
+
 def tomography_menu():
     """Entry point for the main menu's tomography option: either a full
     characterisation sweep (perform_tomo) or a single-point phase-tuning
@@ -1069,13 +1082,16 @@ def tomography_menu():
         "Tomography:\n"
         "\t1. Perform tomography (full sweep + plot)\n"
         "\t2. Check single input/output projector (phase tuning)\n"
+        "\t0. Back\n"
         "> ").strip()
+    if _is_back(choice):
+        return
     if choice == '1':
         perform_tomo()
     elif choice == '2':
         check_projector()
     else:
-        print("Invalid choice — pick 1 or 2")
+        print("Invalid choice — pick 1, 2, or 0/back")
 
 
 def perform_tomo():
@@ -1089,6 +1105,8 @@ def perform_tomo():
     over every input label, not one shared sweep.
     """
     N = _ask_N()
+    if N is None:
+        return
     choice = input(
         "Input sweep?\n"
         "\t1. HVAD (4 generic polarisation bases)\n"
@@ -1096,7 +1114,10 @@ def perform_tomo():
         "\t3. Sj (single process state s0)\n"
         "\t4. Sall (every process state s_j for this N)\n"
         "\t5. Single basis (H/V/A/D/R/L)\n"
+        "\t0. Back\n"
         "> ").strip()
+    if _is_back(choice):
+        return
     if choice == '1':
         labels, set_input = tl.HVAD_BASES, _set_input_basis
     elif choice == '2':
@@ -1120,9 +1141,12 @@ def perform_tomo():
         f"\t1. Path 1 only (ch{LOOP_CHS[0]} via TOM_1)\n"
         "\t2. Path 2 only (dump via OUT_2)\n"
         "\t3. Both\n"
+        "\t0. Back\n"
         "> ").strip()
+    if _is_back(path_choice):
+        return
     if path_choice not in ('1', '2', '3'):
-        print("Invalid choice — pick 1-3")
+        print("Invalid choice — pick 1-3, or 0/back")
         return
     do1, do2 = path_choice in ('1', '3'), path_choice in ('2', '3')
     n_paths = do1 + do2
@@ -1204,13 +1228,18 @@ def check_projector():
     coincidence rate — for phase tuning after a tomo run: e.g. D in, L out,
     path 2, watch the count while adjusting a phase element by hand."""
     N = _ask_N()
+    if N is None:
+        return
     path_choice = input(
         "Which path?\n"
         f"\t1. Path 1 (ch{LOOP_CHS[0]} via TOM_1)\n"
         "\t2. Path 2 (dump via OUT_2)\n"
+        "\t0. Back\n"
         "> ").strip()
+    if _is_back(path_choice):
+        return
     if path_choice not in ('1', '2'):
-        print("Invalid choice — pick 1 or 2")
+        print("Invalid choice — pick 1, 2, or 0/back")
         return
     path = int(path_choice)
 
@@ -1313,16 +1342,23 @@ def main():
             case '1':
                 # Set unitary and s0
                 N = _ask_N()
+                if N is None:
+                    continue
                 _set_unitary(N)
                 _set_input_state(N, 0)
             case '2':
                 N = _ask_N()
+                if N is None:
+                    continue
                 states_choice = input(
                     "Input state(s):\n"
                     "\t1. Single\n"
                     "\t2. Multiple (choose specific s_j's)\n"
                     "\t3. All\n"
+                    "\t0. Back\n"
                     "> ").strip()
+                if _is_back(states_choice):
+                    continue
                 if states_choice == '2':
                     raw = input(f"Which j's, comma-separated (available: {_input_states(N)}): ").strip()
                     js = [int(j) for j in raw.split(',')] if raw else [0]

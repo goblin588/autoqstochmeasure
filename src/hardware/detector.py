@@ -8,7 +8,7 @@ import os
 
 from libraries.settings import (ANTILATCH_HOST, ANTILATCH_PORT,
                                 ANTILATCH_DEVICE_IDS, ANTILATCH_BIAS_VOLTAGES,
-                                LOOP_CHS)
+                                LOOP_CHS, DUMP_CH)
 
 from System import Int32
 
@@ -192,16 +192,43 @@ class Logic16:
         optics config that only routes light to one or two loop channels
         (e.g. _set_bypass_optics) as a latch. They're checked as one group
         (latched only if ALL of them are zero); every other monitored
-        channel (herald, dump) is its own detector and stays checked
+        channel (herald) is its own detector and stays checked
         individually.
+
+        Dump (settings.DUMP_CH) is excluded from the check entirely: it's
+        a standalone single channel (not grouped with anything), and none
+        of the automated loop/exit optics configs (_set_bypass_optics,
+        _set_loop_optics, _set_5050_optics, _set_loop3_optics,
+        _set_loop4_optics) ever route light to it, so it legitimately
+        reads 0 every time they're used -- there's no way to tell that
+        apart from a real dump latch from the count alone. Its counts are
+        still read and returned normally; a genuine dump latch just won't
+        trigger an antilatch ping/retry, it'll show up as a persistent 0
+        in the data instead.
+
+        Returns (flag, reasons): flag is the same any()+all() combination
+        as before; reasons names exactly which group(s) read zero, for
+        logging -- a lone channel as "ch3", the loop group (if ALL of them
+        are zero) as "loop group (ch4,ch6,...)". Empty reasons means
+        flag == 0 (nothing latched).
         """
         counts_by_ch = dict(zip(pos_singles, singles_to_check))
         loop_group = [ch for ch in pos_singles if ch in LOOP_CHS]
-        other_chs = [ch for ch in pos_singles if ch not in LOOP_CHS]
-        group_zero = [counts_by_ch[ch] == 0 for ch in other_chs]
+        other_chs = [ch for ch in pos_singles if ch not in LOOP_CHS and ch != DUMP_CH]
+        group_zero = []
+        reasons = []
+        for ch in other_chs:
+            zero = counts_by_ch[ch] == 0
+            group_zero.append(zero)
+            if zero:
+                reasons.append(f"ch{ch}")
         if loop_group:
-            group_zero.append(all(counts_by_ch[ch] == 0 for ch in loop_group))
-        return any(group_zero) + all(group_zero)
+            zero = all(counts_by_ch[ch] == 0 for ch in loop_group)
+            group_zero.append(zero)
+            if zero:
+                reasons.append(f"loop group ({','.join(f'ch{ch}' for ch in loop_group)})")
+        flag = any(group_zero) + all(group_zero)
+        return flag, reasons
 
     def read_counts_integrated(self, pos_coincidence, pos_singles, neg_singles=[0]):
         """
@@ -229,7 +256,7 @@ class Logic16:
                                                                 pos_singles=pos_singles,
                                                                 neg_singles=neg_singles)
 
-            antilatch_flags = self.antilatch_check(s_counts, pos_singles)
+            antilatch_flags, antilatch_reasons = self.antilatch_check(s_counts, pos_singles)
             if antilatch_flags > 0:
                 # Ping in the background so the readout cadence never stalls on the
                 # server (up to 10 s if unreachable). At most one ping in flight;
@@ -237,7 +264,8 @@ class Logic16:
                 if self._antilatch_thread is None or not self._antilatch_thread.is_alive():
                     self._antilatch_thread = threading.Thread(target=self.antilatch_func, daemon=True)
                     self._antilatch_thread.start()
-                print('.', end='', flush=True) # Simple way to keep track of antilatch events
+                print(f"\nLatching detected -- zero counts on: {', '.join(antilatch_reasons)}",
+                      flush=True)
                 has_latched += antilatch_flags
                 if has_latched > 5:
                     print('\nWARNING: several latching events in a row - is the cryostat warm?')
