@@ -121,17 +121,17 @@ def det_chs_for(N=None):
     ignored, same as delays_for)."""
     return DET_CHS
 
-# Dump isn't physically plugged in right now -- export
-# AUTOTOMO_DUMP_ENABLED=0 for this session to stop every "every channel"
-# acquisition (background/loss calibration, _record_all_channels, ...)
-# from requesting it at all, so there's nothing to misread as a latch or
-# stray signal. Defaults to enabled: once dump is reconnected, just don't
-# set the env var (or set it to 1) and monitoring resumes with no code
-# change needed. path-2-specific tomography/check_projector still
-# reference DUMP_CH/DUMP_DELAYS directly -- those are a deliberate
-# per-call choice, not blanket monitoring, so they're untouched by this
-# and will just read garbage if used while dump is unplugged.
-DUMP_ENABLED = os.environ.get('AUTOTOMO_DUMP_ENABLED', '1') == '1'
+# Dump isn't physically plugged in right now -- export DUMP_ENABLED=0 for
+# this session to stop every "every channel" acquisition (background/loss
+# calibration, _record_all_channels, ...) from requesting it at all, so
+# there's nothing to misread as a latch or stray signal. Defaults to
+# enabled: once dump is reconnected, just don't set the env var (or set it
+# to 1) and monitoring resumes with no code change needed.
+# path-2-specific tomography/check_projector still reference DUMP_CH/
+# DUMP_DELAYS directly -- those are a deliberate per-call choice, not
+# blanket monitoring, so they're untouched by this and will just read
+# garbage if used while dump is unplugged.
+DUMP_ENABLED = os.environ.get('DUMP_ENABLED', '1') == '1'
 
 DELAYS = delays_for()
 DET_CHS = [*LOOP_CHS, DUMP_CH] if DUMP_ENABLED else list(LOOP_CHS)
