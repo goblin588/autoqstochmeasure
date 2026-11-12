@@ -5,12 +5,15 @@ run it unattended overnight -- one bad step logs + notifies + moves on, a
 deliberate Ctrl-C stops the whole queue.
 
 Run with AUTOTOMO_SIM=1 or --sim for mock hardware.
+Run with DUMP_ENABLED=0 or --no-dump if the dump detector isn't connected.
 """
 import os
 import sys
 
 if '--sim' in sys.argv:
     os.environ['AUTOTOMO_SIM'] = '1'
+if '--no-dump' in sys.argv:
+    os.environ['DUMP_ENABLED'] = '0'
 
 import datetime
 import json

@@ -3,6 +3,7 @@ Prepare the s0 process state for a chosen unitary N:
 sets HWP_IN/QWP_IN to s0_N and the fixed waveplates (IN_2/OUT_2) to that U's angles.
 
 Run with AUTOTOMO_SIM=1 or --sim for mock hardware.
+Run with DUMP_ENABLED=0 or --no-dump if the dump detector isn't connected.
 """
 import csv
 import json
@@ -18,6 +19,8 @@ from pathlib import Path
 
 if '--sim' in sys.argv:
     os.environ['AUTOTOMO_SIM'] = '1'
+if '--no-dump' in sys.argv:
+    os.environ['DUMP_ENABLED'] = '0'
 
 import libraries.tomography as tl
 import libraries.settings as st
