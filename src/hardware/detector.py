@@ -3,24 +3,14 @@ import json
 import socket
 import threading
 import time
-import clr
 import os
 
 from libraries.settings import (ANTILATCH_HOST, ANTILATCH_PORT,
                                 ANTILATCH_DEVICE_IDS, ANTILATCH_BIAS_VOLTAGES,
                                 LOOP_CHS, DUMP_CH)
 
-from System import Int32
-
 import numpy as np
 
-
-dll_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '.', 'bin', 'ttInterface.dll'))
-print("Loading DLL from:", dll_path)
-
-clr.AddReference(dll_path)
-
-from TimeTag import TTInterface, Logic
 
 def reset_detectors():
     """Ask the antilatch server to cycle the detector bias voltages.
@@ -53,6 +43,13 @@ def binary_code(channel: int | Sequence[int]) -> int:
 class Logic16:
     def __init__(self, coincidence_window=1e-9, logic_mode=True,
                 integration_window=0.5):
+        import clr
+        from System import Int32
+        dll_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '.', 'bin', 'ttInterface.dll'))
+        print("Loading DLL from:", dll_path)
+        clr.AddReference(dll_path)
+        from TimeTag import TTInterface, Logic
+
         self.MyTagger = TTInterface()
         self.MyTagger.Open()
         self._resolution = self.MyTagger.GetResolution()
