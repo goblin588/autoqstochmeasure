@@ -15,7 +15,7 @@ class Waveplate:
     def setOA(self, oa):
         self.OA = oa
 
-COMPORT = 'COM6'
+COMPORT = 'COM6' if os.name == 'nt' else '/dev/ttyUSB1'
 SIM_MODE = os.environ.get('AUTOTOMO_SIM', '0') == '1'
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
