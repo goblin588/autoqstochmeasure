@@ -18,6 +18,15 @@ import datetime
 import time
 from pathlib import Path
 
+# Output uses →, —, ° etc. When stdout isn't a console (piped to tee/a log,
+# run from a scheduler) Windows falls back to cp1252 and print() raises
+# UnicodeEncodeError mid-measurement. Force UTF-8 and never die on a glyph.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding='utf-8', errors='replace')
+    except (AttributeError, ValueError):
+        pass
+
 if '--sim' in sys.argv:
     os.environ['AUTOTOMO_SIM'] = '1'
 if '--no-dump' in sys.argv:
@@ -258,10 +267,15 @@ def _save_results(rows, N, label, background=None):
                 return dict(zip(('mean_hz', 'std_hz'), _bin_rate_mean_std(stage['counts'], stage['ch'])))
             return {str(ch): dict(zip(('mean_hz', 'std_hz'), _bin_rate_mean_std(stage['counts'], ch)))
                     for ch in st.LOOP_CHS}
-        stages = {
-            LOSS_STAGE_LABELS[key]: _stage_summary(stage)
-            for key, stage in loss_cal.get('stages', {}).items()
-        }
+        # Older loss files also carry stages from the retired fiber-replug
+        # protocol (source_dump, dump, ch2, ...) — keep those under their raw
+        # key rather than KeyError-ing after the data has been collected.
+        stages = {}
+        for key, stage in loss_cal.get('stages', {}).items():
+            try:
+                stages[LOSS_STAGE_LABELS.get(key, key)] = _stage_summary(stage)
+            except Exception as e:
+                print(f"  (skipping loss stage {key!r} in metadata: {e!r})")
         loss_calibration = {'file': loss_cal_path.name, 'stages': stages,
                              'losses': loss_cal.get('losses')}
 

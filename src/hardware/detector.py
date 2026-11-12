@@ -135,7 +135,9 @@ class Logic16:
     def set_coincidence_window(self, window):
         assert self._logic_mode
         self._coincidence_window = window*1e-9
-        self.MyLogic.SetWindowWidth(Int32(int(self._coincidence_window / self._resolution)))
+        # Int32 is imported lazily in __init__ (pythonnet), not at module
+        # level -- use the reference kept on the instance there.
+        self.MyLogic.SetWindowWidth(self.TimerCounter1(int(self._coincidence_window / self._resolution)))
         # counts in the buffer were taken under the old window
         self.clear_buffer()
 
