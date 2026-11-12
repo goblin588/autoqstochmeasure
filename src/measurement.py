@@ -12,6 +12,7 @@ import os
 import socket
 import statistics
 import subprocess
+import traceback
 import sys
 import datetime
 import time
@@ -1323,6 +1324,271 @@ def calibrate_background_and_loss():
     calibrate_loss()
 
 
+# ── Overnight queue ──────────────────────────────────────────────────────────
+# Build a queue of calibration/measurement steps (tune delays, loss
+# calibration, unitary measurements) in any order, save/load it as JSON, and
+# run it unattended overnight -- one bad step logs + notifies + moves on, a
+# deliberate Ctrl-C stops the whole queue.
+
+_QUEUE_LOSS_STAGES = [
+    ('loop01', 'Zero-loop + one-loop pass, together'),
+    ('5050',   '50/50 split, all channels (independent cross-check)'),
+]
+
+
+def _describe_queue_step(step):
+    t = step['type']
+    if t == 'tune':
+        return f"Tune delays: channels={step['signal_chs']}, integration_time={step['integration_time']}"
+    if t == 'loss':
+        return f"Loss measurement: stage={step['stage']}"
+    if t == 'measurement':
+        return (f"Measurement: N={step['N']}, js={step['js']}, "
+                f"tomo={step['tomo']}, duration_s={step['duration_s']}")
+    return str(step)
+
+
+def _ask_tune_step():
+    chs = input(f"Channel(s) to tune, comma-separated "
+                f"(Enter = all {LOOP_CHS}; include {DUMP_CH} to also tune the dump, "
+                f"fixed regardless of process N): ").strip()
+    signal_chs = [int(c) for c in chs.split(',')] if chs else list(LOOP_CHS)
+    t = input("Integration time per point, in seconds "
+              f"(Enter = per-channel default, ch{LOOP_CHS[0]} ~1.5s up to "
+              f"ch{LOOP_CHS[-1]} ~15s; or type a number to use it for every "
+              "channel): ").strip()
+    return {'type': 'tune', 'signal_chs': signal_chs,
+            'integration_time': float(t) if t else None}
+
+
+def _ask_loss_step():
+    print("Loss-measurement stage:")
+    for i, (key, label) in enumerate(_QUEUE_LOSS_STAGES, 1):
+        print(f"\t{i}. {label}")
+    choice = input("> ").strip()
+    try:
+        key, _ = _QUEUE_LOSS_STAGES[int(choice) - 1]
+    except (ValueError, IndexError):
+        print("Invalid choice")
+        return None
+    return {'type': 'loss', 'stage': key}
+
+
+def _ask_queue_measurement_step():
+    N = _ask_N()
+    if N is None:
+        return None
+    states_choice = input(
+        "Input state(s):\n"
+        "\t1. Single\n"
+        "\t2. Multiple (choose specific s_j's)\n"
+        "\t3. All\n"
+        "> ").strip()
+    if states_choice == '2':
+        raw = input(f"Which j's, comma-separated (available: {_input_states(N)}): ").strip()
+        js = [int(j) for j in raw.split(',')] if raw else [0]
+    elif states_choice == '3':
+        js = 'all'  # resolved against _input_states(N) at run time, not here
+    else:
+        j = input("Which j? (Enter = 0): ").strip()
+        js = [int(j)] if j else [0]
+    tomo = input("Perform output tomo for this input "
+                 "(full collection time each, no plot)? [y/N] ").strip().lower() == 'y'
+    duration_s = _ask_duration()
+    return {'type': 'measurement', 'N': N, 'js': js, 'tomo': tomo, 'duration_s': duration_s}
+
+
+_QUEUE_BUILDERS = {
+    '1': ('Tune channel delays', _ask_tune_step),
+    '2': ('Loss measurement', _ask_loss_step),
+    '3': ('Unitary measurement', _ask_queue_measurement_step),
+}
+
+
+def build_queue():
+    """Interactive menu loop -- add any number of steps, in any order, then
+    '0. Done'. Shows the queue-so-far after every change."""
+    queue = []
+    while True:
+        print("\nQueue so far:")
+        if not queue:
+            print("  (empty)")
+        else:
+            for i, step in enumerate(queue, 1):
+                print(f"  {i}. {_describe_queue_step(step)}")
+        choice = input(
+            "\n1. Tune channel delays\n"
+            "2. Loss measurement\n"
+            "3. Unitary measurement\n"
+            "4. Remove a step\n"
+            "0. Done\n"
+            "> ").strip()
+        if choice == '0':
+            return queue
+        if choice == '4':
+            if not queue:
+                print("Queue is empty")
+                continue
+            idx = input("Remove which step number? ").strip()
+            try:
+                queue.pop(int(idx) - 1)
+            except (ValueError, IndexError):
+                print("Invalid step number")
+            continue
+        if choice in _QUEUE_BUILDERS:
+            _, builder = _QUEUE_BUILDERS[choice]
+            step = builder()
+            if step:
+                queue.append(step)
+        else:
+            print("Invalid choice")
+
+
+QUEUE_DIR = Path(st.DATA_DIR) / "queues"
+
+
+def save_queue(queue, path=None):
+    os.makedirs(QUEUE_DIR, exist_ok=True)
+    path = Path(path) if path else QUEUE_DIR / f"{datetime.datetime.now():%Y%m%d_%H%M%S}_overnight_queue.json"
+    path.write_text(json.dumps(queue, indent=1))
+    print(f"Saved queue -> {path}")
+    return path
+
+
+def load_queue(path):
+    return json.loads(Path(path).read_text())
+
+
+def _list_saved_queues():
+    """Every *.json under QUEUE_DIR, most recently saved first."""
+    if not QUEUE_DIR.exists():
+        return []
+    return sorted(QUEUE_DIR.glob('*.json'), key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def _ask_queue_path():
+    """Pick a saved queue by number from QUEUE_DIR, or type a path by
+    hand. Returns None on 0/back."""
+    saved = _list_saved_queues()
+    if saved:
+        print("\nSaved queues:")
+        for i, p in enumerate(saved, 1):
+            print(f"\t{i}. {p.name}")
+        choice = input(f"\tOr type a path directly, or 0/back\n> ").strip()
+    else:
+        print(f"\nNo saved queues in {QUEUE_DIR} yet.")
+        choice = input("Queue file path (or 0/back): ").strip()
+    if _is_back(choice):
+        return None
+    try:
+        return saved[int(choice) - 1]
+    except (ValueError, IndexError):
+        return choice
+
+
+def _run_queue_step(step):
+    """Dispatch one queue step. Raises on failure -- run_queue() handles
+    logging/notifying/continuing."""
+    t = step['type']
+    if t == 'tune':
+        if SIM_MODE:
+            # Same guard as main() option 3 -- tune_delays needs the real
+            # counting card even to import (pythonnet/TimeTag).
+            print("[SIM MODE] delay tuning needs hardware -- skipping")
+            return
+        from libraries.countingcard import tune_delays
+        tune_delays(signal_chs=step.get('signal_chs') or LOOP_CHS,
+                    integration_time=step.get('integration_time'),
+                    auto_save=True)
+    elif t == 'loss':
+        calibrate_loss(run_stages=[step['stage']])
+    elif t == 'measurement':
+        js = step['js']
+        if js == 'all':
+            js = _input_states(step['N'])
+        measurement(step['N'], performTomo=step['tomo'], js=js,
+                    duration_s=step['duration_s'], auto=True)
+    else:
+        raise ValueError(f"Unknown step type: {t!r}")
+
+
+def run_queue(queue):
+    """Run every step in order. A step that raises is logged + notified and
+    the queue continues; a KeyboardInterrupt stops the whole queue instead.
+    Writes data/{timestamp}_queue_log.json as it goes, not just at the end."""
+    os.makedirs(st.DATA_DIR, exist_ok=True)
+    log_path = Path(st.DATA_DIR) / f"{datetime.datetime.now():%Y%m%d_%H%M%S}_queue_log.json"
+    log = {'started_at': datetime.datetime.now().isoformat(), 'steps': []}
+
+    def _write_log():
+        log_path.write_text(json.dumps(log, indent=1))
+
+    ok = failed = 0
+    try:
+        for i, step in enumerate(queue, 1):
+            entry = {'index': i, 'step': step, 'started_at': datetime.datetime.now().isoformat()}
+            print(f"\n=== Step {i}/{len(queue)}: {_describe_queue_step(step)} ===")
+            try:
+                _run_queue_step(step)
+                entry['status'] = 'ok'
+                ok += 1
+            except Exception as e:
+                entry['status'] = 'failed'
+                entry['error'] = str(e)
+                entry['traceback'] = traceback.format_exc()
+                failed += 1
+                print(f"Step {i} FAILED: {e}\n{entry['traceback']}")
+                notify(f"Queue step {i} failed: {_describe_queue_step(step)} -- {e}",
+                       title="Queue Step Failed", priority="high")
+            entry['finished_at'] = datetime.datetime.now().isoformat()
+            log['steps'].append(entry)
+            _write_log()
+    except KeyboardInterrupt:
+        log['stopped_by'] = 'KeyboardInterrupt'
+        _write_log()
+        print("\nQueue interrupted by Ctrl-C -- stopping the whole queue.")
+        notify(f"Queue interrupted by Ctrl-C after {ok} ok / {failed} failed",
+               title="Queue Interrupted", priority="high")
+        return log
+
+    log['finished_at'] = datetime.datetime.now().isoformat()
+    log['ok'], log['failed'] = ok, failed
+    _write_log()
+    print(f"\nQueue finished: {ok} ok, {failed} failed -> {log_path}")
+    notify(f"Overnight queue done: {ok} ok, {failed} failed",
+           title="Queue Complete", priority="high")
+    return log
+
+
+def overnight_queue_menu():
+    """Entry point for the main menu's overnight-queue option: build (or
+    load) a queue of steps, confirm, then run it unattended."""
+    choice = input("1. Build a new queue\n2. Load a saved queue file\n> ").strip()
+    if choice == '2':
+        path = _ask_queue_path()
+        if path is None:
+            return
+        queue = load_queue(path)
+    else:
+        queue = build_queue()
+        if queue and input("Save this queue to a file for later? [y/N] ").strip().lower() == 'y':
+            save_queue(queue)
+
+    if not queue:
+        print("Empty queue -- nothing to run")
+        return
+
+    print("\nFinal queue:")
+    for i, step in enumerate(queue, 1):
+        print(f"  {i}. {_describe_queue_step(step)}")
+
+    if input("\nRun this queue now? [y/N] ").strip().lower() != 'y':
+        print("Not running.")
+        return
+
+    run_queue(queue)
+
+
 def main():
     if SIM_MODE:
         print("[SIM MODE] Running without hardware")
@@ -1336,9 +1602,10 @@ def main():
             "\t3. Tune channel delays\n"
             "\t4. Perform tomography\n"
             "\t5. Calibrate background noise and loss\n"
-            "\t6. Test antilatch server connection\n"
-            "\t7. Unlatch detectors\n"
-            "\t8. Keep detectors unlatched\n"
+            "\t6. Run overnight queue\n"
+            "\t7. Test antilatch server connection\n"
+            "\t8. Unlatch detectors\n"
+            "\t9. Keep detectors unlatched\n"
             )
 
         match n:
@@ -1396,8 +1663,10 @@ def main():
             case '5':
                 calibrate_background_and_loss()
             case '6':
-                ping_antilatch()
+                overnight_queue_menu()
             case '7':
+                ping_antilatch()
+            case '8':
                 if SIM_MODE:
                     print("[SIM MODE] no detectors to unlatch")
                 else:
@@ -1406,7 +1675,7 @@ def main():
                     from hardware.detector import reset_detectors
                     if reset_detectors():
                         print("Detectors unlatched (bias voltages cycled)")
-            case '8':
+            case '9':
                 if SIM_MODE:
                     print("[SIM MODE] no detectors to unlatch")
                 else:
@@ -1421,7 +1690,7 @@ def main():
                     except KeyboardInterrupt:
                         print("\nPeriodic unlatching stopped.")
             case _:
-                print("Please choose a valid option 1-8 from list:")
+                print("Please choose a valid option 1-9 from list:")
 
 
 if __name__ == "__main__":
