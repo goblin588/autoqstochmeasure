@@ -14,7 +14,11 @@ dependencies = [
     "mcculw>=1.0.0; sys_platform == 'win32'",
     "pythonnet; sys_platform == 'win32'",
     "pynet>=0.0.1",
+    "optical_switch",
 ]
+
+[tool.uv.sources]
+optical_switch = { path = "../optical_switch" }
 
 [project.scripts]
 tomo-auto      = "tomo_auto:main"

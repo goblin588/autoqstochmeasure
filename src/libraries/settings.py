@@ -16,6 +16,11 @@ class Waveplate:
         self.OA = oa
 
 COMPORT = 'COM6'
+# Photon switch (pulse-timing/gating board, see ../optical_switch) -- serial,
+# same PC as everything else, different port from the SMC100 stages'
+# COMPORT. Confirm/correct this against the real port (Device Manager on
+# Windows) before relying on it; placeholder for now.
+SWITCH_PORT = os.environ.get('SWITCH_PORT', 'COM8')
 SIM_MODE = os.environ.get('AUTOTOMO_SIM', '0') == '1'
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 

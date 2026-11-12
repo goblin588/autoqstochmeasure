@@ -1315,6 +1315,86 @@ def ping_antilatch():
     return False
 
 
+def _test_waveplates():
+    """Open one SMC100 connection and query every known waveplate's status
+    (TS?, read-only -- nothing moves) -- same primitive as home_stages.py's
+    _get_state(), but with each stage wrapped in its own try/except so one
+    unresponsive stage doesn't stop the rest from being checked. Returns
+    (ok_count, total_count)."""
+    if SIM_MODE:
+        print("  [SIM MODE] waveplates skipped")
+        return len(st.WAVEPLATES), len(st.WAVEPLATES)
+
+    import interfaces.smc100 as smc
+    ok = 0
+    try:
+        conn = smc.SMC100Connection(port=COMPORT)
+    except Exception as e:
+        print(f"  Waveplates: CONNECT FAILED to {COMPORT} ({e}) -- can't reach any stage")
+        return 0, len(st.WAVEPLATES)
+    with conn:
+        for name, cfg in st.WAVEPLATES.items():
+            try:
+                stage = smc.SMC100Stage(conn, smcID=cfg['stage'])
+                stage.get_status()
+                print(f"  {name} (stage {cfg['stage']}): OK")
+                ok += 1
+            except Exception as e:
+                print(f"  {name} (stage {cfg['stage']}): NO RESPONSE ({e})")
+    return ok, len(st.WAVEPLATES)
+
+
+def _test_switch():
+    """Open the optical switch's serial port, then -- since its real
+    commands are write-only with no documented ACK (see
+    optical_switch/docs/PROTOCOL.md) -- try the unverified @Readstatus=
+    query and report whatever comes back, if anything. Never raises;
+    "no response" is reported, not treated as failure, since silence may
+    just be this protocol's normal behaviour. Returns True if the port at
+    least opened."""
+    if SIM_MODE:
+        print("  [SIM MODE] switch skipped")
+        return True
+
+    from optical_switch import OpticalSwitch
+    try:
+        sw = OpticalSwitch(st.SWITCH_PORT)
+    except Exception as e:
+        print(f"  Switch: CONNECT FAILED to {st.SWITCH_PORT} ({e})")
+        return False
+    with sw:
+        print(f"  Switch: port {st.SWITCH_PORT} opened")
+        try:
+            sw.send_raw("@Readstatus=0x00\n")
+            reply = sw.read_line()
+        except Exception as e:
+            print(f"  Switch: status query failed to send/read ({e})")
+            return True
+        if reply:
+            print(f"  Switch: status query replied: {reply!r}")
+        else:
+            print("  Switch: no reply to status query (may be normal -- write-only protocol, unverified command)")
+    return True
+
+
+def test_all_connections():
+    """Antilatch, every waveplate, and the optical switch -- report success
+    or failure per item, never crash the whole check on one failure
+    (same shape as run_queue()'s per-step try/except-with-tally)."""
+    print("Antilatch server:")
+    antilatch_ok = ping_antilatch()
+
+    print("\nWaveplates:")
+    wp_ok, wp_total = _test_waveplates()
+
+    print("\nOptical switch:")
+    switch_ok = _test_switch()
+
+    print(f"\nSummary: antilatch {'OK' if antilatch_ok else 'NO RESPONSE'}, "
+          f"waveplates {wp_ok}/{wp_total} responded, "
+          f"switch {'reachable' if switch_ok else 'NO RESPONSE'}")
+
+
 def calibrate_background_and_loss():
     """Background/noise and/or loss calibration, grouped into one menu
     option -- a measurement's own pre-run check already treats these as
@@ -1695,7 +1775,7 @@ def main():
             "\t4. Collect statistics\n"
             "\t5. Run measurement queue\n"
             "\t6. Perform tomography\n"
-            "\t7. Test antilatch server connection\n"
+            "\t7. Test all connections\n"
             "\t8. Unlatch detectors\n"
             "\t9. Keep detectors unlatched\n"
             )
@@ -1757,7 +1837,7 @@ def main():
             case '6':
                 tomography_menu()
             case '7':
-                ping_antilatch()
+                test_all_connections()
             case '8':
                 if SIM_MODE:
                     print("[SIM MODE] no detectors to unlatch")
