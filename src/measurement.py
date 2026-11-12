@@ -1503,6 +1503,65 @@ def _ask_queue_path():
         return choice
 
 
+DURATIONS_FILE = Path(st.DATA_DIR) / "queue_step_durations.json"
+
+
+def _step_signature(step):
+    """Stable key for DURATIONS_FILE -- the same step 'shape' reuses
+    history; parameters that actually change wall-clock time (which
+    channels, which stage) get their own entry."""
+    t = step['type']
+    if t == 'tune':
+        return f"tune:{sorted(step.get('signal_chs') or [])}:{step.get('integration_time')}"
+    if t == 'loss':
+        return f"loss:{step['stage']}"
+    return t
+
+
+def _load_step_durations():
+    if DURATIONS_FILE.exists():
+        return json.loads(DURATIONS_FILE.read_text())
+    return {}
+
+
+def _record_step_duration(step, seconds):
+    """Running mean + count per step signature, persisted so future queues
+    (even in later sessions) can estimate from it. Only called for steps
+    that actually completed -- a failed/discarded step's wall time isn't
+    representative."""
+    sig = _step_signature(step)
+    history = _load_step_durations()
+    entry = history.setdefault(sig, {'count': 0, 'mean_s': 0.0})
+    entry['count'] += 1
+    entry['mean_s'] += (seconds - entry['mean_s']) / entry['count']
+    os.makedirs(DURATIONS_FILE.parent, exist_ok=True)
+    DURATIONS_FILE.write_text(json.dumps(history, indent=1))
+
+
+def _estimate_step_seconds(step, history):
+    """Best-effort seconds estimate for one queue step, or None if there's
+    no way to know yet.
+
+    measurement steps are computed directly (duration_s x settings), not
+    from history, since the per-setting time is already a parameter the
+    operator chose -- except duration_s=None (stream until Ctrl-C), which
+    is fundamentally open-ended.
+
+    tune/loss steps have no such parameter (how long tune_delays or a loss
+    stage takes depends on the real hardware's response), so they fall
+    back to DURATIONS_FILE's running mean for a step with the same
+    signature -- None the first time, before any history exists."""
+    t = step['type']
+    if t == 'measurement':
+        if step['duration_s'] is None:
+            return None
+        js = step['js']
+        n_states = len(_input_states(step['N'])) if js == 'all' else len(js)
+        n_bases = 6 if step['tomo'] else 1
+        return step['duration_s'] * n_states * n_bases
+    return history.get(_step_signature(step), {}).get('mean_s')
+
+
 def _run_queue_step(step):
     """Dispatch one queue step. Raises on failure -- run_queue() handles
     logging/notifying/continuing."""
@@ -1545,9 +1604,13 @@ def run_queue(queue):
         for i, step in enumerate(queue, 1):
             entry = {'index': i, 'step': step, 'started_at': datetime.datetime.now().isoformat()}
             print(f"\n=== Step {i}/{len(queue)}: {_describe_queue_step(step)} ===")
+            t0 = time.monotonic()
             try:
                 _run_queue_step(step)
+                elapsed = time.monotonic() - t0
                 entry['status'] = 'ok'
+                entry['elapsed_s'] = elapsed
+                _record_step_duration(step, elapsed)
                 ok += 1
             except Exception as e:
                 entry['status'] = 'failed'
@@ -1595,9 +1658,21 @@ def measurement_queue_menu():
         print("Empty queue -- nothing to run")
         return
 
+    history = _load_step_durations()
     print("\nFinal queue:")
+    total = 0.0
+    any_unknown = False
     for i, step in enumerate(queue, 1):
-        print(f"  {i}. {_describe_queue_step(step)}")
+        est = _estimate_step_seconds(step, history)
+        if est is None:
+            print(f"  {i}. {_describe_queue_step(step)} (duration unknown)")
+            any_unknown = True
+        else:
+            print(f"  {i}. {_describe_queue_step(step)} (~{_format_duration(est)})")
+            total += est
+    print(f"\nEstimated total: ~{_format_duration(total)}"
+          + (" + unknown step(s) (no history yet -- first run of that kind times it for next time)"
+             if any_unknown else ""))
 
     if input("\nRun this queue now? [y/N] ").strip().lower() != 'y':
         print("Not running.")
