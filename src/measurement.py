@@ -911,12 +911,14 @@ def measurement(N, performTomo=False, js=None, duration_s=None, auto=False):
     than another. Everything goes to one file; rows carry an input_state
     column (= j).
 
-    Before the run starts, a quick _acquire_background(N) check (delays
-    bumped +MEASUREMENT_BG_OFFSET_NS ns off tuned, same convention as
+    Before the run starts, the waveplates are set to N's unitary, then a
+    quick _acquire_background(N) check (delays bumped
+    +MEASUREMENT_BG_OFFSET_NS ns off tuned, same convention as
     calibrate_background; 20 x 5s bins, same as calibrate_loss's
     recordings) is saved into the sidecar JSON alongside the rows — one
-    accidental-coincidence reading per run, not just a pointer to whichever
-    separate noise_calibration happened to be most recent.
+    accidental-coincidence reading per run, taken at the actual run
+    configuration, not just a pointer to whichever separate
+    noise_calibration happened to be most recent.
 
     auto=True skips every interactive prompt (duration confirmation and the
     offer to re-run background calibration) for unattended/queued use --
@@ -948,12 +950,13 @@ def measurement(N, performTomo=False, js=None, duration_s=None, auto=False):
             if input("Press Enter to begin, or c to change the duration: ").strip().lower() != 'c':
                 break
 
+    _set_unitary(N)
+
     print(f"Measuring background (+{st.MEASUREMENT_BG_OFFSET_NS:.0f}ns off tuned delays, "
           f"{st.MEASUREMENT_BG_N_BINS} x {st.MEASUREMENT_BG_BIN_S:.0f}s bins)...")
     background = _acquire_background(N)
     print(f"  {background}")
 
-    _set_unitary(N)
     start = time.monotonic()
 
     rows = []
