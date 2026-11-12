@@ -1316,19 +1316,36 @@ def ping_antilatch():
 
 
 def calibrate_background_and_loss():
-    """Background/noise calibration followed by loss calibration, as one
-    menu option -- a measurement's own pre-run check already treats these
-    as one combined step (see _maybe_calibrate/_maybe_calibrate_loss), so
-    there's no reason to make the operator pick them separately here."""
-    calibrate_background()
-    calibrate_loss()
+    """Background/noise and/or loss calibration, grouped into one menu
+    option -- a measurement's own pre-run check already treats these as
+    one combined step (see _maybe_calibrate/_maybe_calibrate_loss), but
+    picking them by hand still benefits from choosing which to actually
+    run rather than always doing both."""
+    choice = input(
+        "Which calibration?\n"
+        "\t1. Background noise\n"
+        "\t2. Loss\n"
+        "\t3. Both\n"
+        "\t0. Back\n"
+        "> ").strip()
+    if _is_back(choice):
+        return
+    if choice == '1':
+        calibrate_background()
+    elif choice == '2':
+        calibrate_loss()
+    elif choice == '3':
+        calibrate_background()
+        calibrate_loss()
+    else:
+        print("Invalid choice — pick 1, 2, 3, or 0/back")
 
 
-# ── Overnight queue ──────────────────────────────────────────────────────────
+# ── Measurement queue ────────────────────────────────────────────────────────
 # Build a queue of calibration/measurement steps (tune delays, loss
 # calibration, unitary measurements) in any order, save/load it as JSON, and
-# run it unattended overnight -- one bad step logs + notifies + moves on, a
-# deliberate Ctrl-C stops the whole queue.
+# run it unattended -- one bad step logs + notifies + moves on, a deliberate
+# Ctrl-C stops the whole queue.
 
 _QUEUE_LOSS_STAGES = [
     ('loop01', 'Zero-loop + one-loop pass, together'),
@@ -1449,7 +1466,7 @@ QUEUE_DIR = Path(st.DATA_DIR) / "queues"
 
 def save_queue(queue, path=None):
     os.makedirs(QUEUE_DIR, exist_ok=True)
-    path = Path(path) if path else QUEUE_DIR / f"{datetime.datetime.now():%Y%m%d_%H%M%S}_overnight_queue.json"
+    path = Path(path) if path else QUEUE_DIR / f"{datetime.datetime.now():%Y%m%d_%H%M%S}_measurement_queue.json"
     path.write_text(json.dumps(queue, indent=1))
     print(f"Saved queue -> {path}")
     return path
@@ -1492,7 +1509,7 @@ def _run_queue_step(step):
     t = step['type']
     if t == 'tune':
         if SIM_MODE:
-            # Same guard as main() option 3 -- tune_delays needs the real
+            # Same guard as main() option 2 -- tune_delays needs the real
             # counting card even to import (pythonnet/TimeTag).
             print("[SIM MODE] delay tuning needs hardware -- skipping")
             return
@@ -1555,13 +1572,13 @@ def run_queue(queue):
     log['ok'], log['failed'] = ok, failed
     _write_log()
     print(f"\nQueue finished: {ok} ok, {failed} failed -> {log_path}")
-    notify(f"Overnight queue done: {ok} ok, {failed} failed",
+    notify(f"Measurement queue done: {ok} ok, {failed} failed",
            title="Queue Complete", priority="high")
     return log
 
 
-def overnight_queue_menu():
-    """Entry point for the main menu's overnight-queue option: build (or
+def measurement_queue_menu():
+    """Entry point for the main menu's measurement-queue option: build (or
     load) a queue of steps, confirm, then run it unattended."""
     choice = input("1. Build a new queue\n2. Load a saved queue file\n> ").strip()
     if choice == '2':
@@ -1598,11 +1615,11 @@ def main():
         n = input(
             "Do you want to:\n"
             "\t1. Set unitary and s0 input state\n"
-            "\t2. Collect statistics\n"
-            "\t3. Tune channel delays\n"
-            "\t4. Perform tomography\n"
-            "\t5. Calibrate background noise and loss\n"
-            "\t6. Run overnight queue\n"
+            "\t2. Tune channel delays\n"
+            "\t3. Calibrate background noise and/or loss\n"
+            "\t4. Collect statistics\n"
+            "\t5. Run measurement queue\n"
+            "\t6. Perform tomography\n"
             "\t7. Test antilatch server connection\n"
             "\t8. Unlatch detectors\n"
             "\t9. Keep detectors unlatched\n"
@@ -1617,6 +1634,26 @@ def main():
                 _set_unitary(N)
                 _set_input_state(N, 0)
             case '2':
+                if SIM_MODE:
+                    print("[SIM MODE] delay tuning needs hardware")
+                else:
+                    from libraries.countingcard import tune_delays
+                    from libraries.settings import LOOP_CHS, DUMP_CH
+                    chs = input(f"Channel(s) to tune, comma-separated "
+                                f"(Enter = all {LOOP_CHS}; include {DUMP_CH} to also tune the dump, "
+                                f"fixed regardless of process N): ").strip()
+                    signal_chs = [int(c) for c in chs.split(',')] if chs else LOOP_CHS
+                    t = input("Integration time per point, in seconds "
+                              f"(Enter = per-channel default, ch{LOOP_CHS[0]} ~1.5s up to "
+                              f"ch{LOOP_CHS[-1]} ~15s; or type a number to use it for every "
+                              "channel): ").strip()
+                    tune_delays(
+                        signal_chs=signal_chs,
+                        integration_time=float(t) if t else None,
+                    )
+            case '3':
+                calibrate_background_and_loss()
+            case '4':
                 N = _ask_N()
                 if N is None:
                     continue
@@ -1640,30 +1677,10 @@ def main():
                 tomo = input("Perform output tomo for this input "
                              "(full collection time each, no plot)? [y/N] ").strip().lower() == 'y'
                 measurement(N, performTomo=tomo, js=js)
-            case '3':
-                if SIM_MODE:
-                    print("[SIM MODE] delay tuning needs hardware")
-                else:
-                    from libraries.countingcard import tune_delays
-                    from libraries.settings import LOOP_CHS, DUMP_CH
-                    chs = input(f"Channel(s) to tune, comma-separated "
-                                f"(Enter = all {LOOP_CHS}; include {DUMP_CH} to also tune the dump, "
-                                f"fixed regardless of process N): ").strip()
-                    signal_chs = [int(c) for c in chs.split(',')] if chs else LOOP_CHS
-                    t = input("Integration time per point, in seconds "
-                              f"(Enter = per-channel default, ch{LOOP_CHS[0]} ~1.5s up to "
-                              f"ch{LOOP_CHS[-1]} ~15s; or type a number to use it for every "
-                              "channel): ").strip()
-                    tune_delays(
-                        signal_chs=signal_chs,
-                        integration_time=float(t) if t else None,
-                    )
-            case '4':
-                tomography_menu()
             case '5':
-                calibrate_background_and_loss()
+                measurement_queue_menu()
             case '6':
-                overnight_queue_menu()
+                tomography_menu()
             case '7':
                 ping_antilatch()
             case '8':
