@@ -3,9 +3,9 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "autotomo"
+name = "autoqstochmeasure"
 version = "0.1.0"
-description = "Automated polarisation tomography for photonic experiments"
+description = "Automated measurement of a quantum stochastic process via coincidence counting"
 requires-python = ">=3.11"
 dependencies = [
     "numpy",
@@ -15,10 +15,12 @@ dependencies = [
     "pythonnet; sys_platform == 'win32'",
     "pynet>=0.0.1",
     "optical_switch",
+    "tomocore",
 ]
 
 [tool.uv.sources]
 optical_switch = { path = "../optical_switch" }
+tomocore = { path = "../tomocore", editable = true }
 
 [project.scripts]
 tomo-auto      = "tomo_auto:main"

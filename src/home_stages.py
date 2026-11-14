@@ -5,9 +5,9 @@ import os
 import sys
 
 if '--sim' in sys.argv:
-    os.environ['AUTOTOMO_SIM'] = '1'
+    os.environ['TOMOCORE_SIM'] = '1'
 
-from libraries.settings import (
+from tomocore.settings import (
     HWP_IN, QWP_IN, HWP_IN_2, QWP_IN_2,
     HWP_TOM_1, QWP_TOM_1, HWP_OUT_2, QWP_OUT_2,
     HWP_TOM_DUMP, QWP_TOM_DUMP, HWP_1, QWP_1, HWP_12, QWP_12,
@@ -35,7 +35,7 @@ _NOT_REFERENCED = {'0A', '0B', '0C', '0D', '0E', '0F', '10', '11'}
 
 
 def _get_state(sid):
-    import interfaces.smc100 as smc
+    import tomocore.interfaces.smc100 as smc
     with smc.SMC100Connection(port=COMPORT) as conn:
         stage = smc.SMC100Stage(conn, smcID=sid)
         _, state = stage.get_status()
@@ -43,7 +43,7 @@ def _get_state(sid):
 
 
 def _home_stage(sid):
-    import interfaces.smc100 as smc
+    import tomocore.interfaces.smc100 as smc
     with smc.SMC100Connection(port=COMPORT) as conn:
         stage = smc.SMC100Stage(conn, smcID=sid)
         stage.enable()
