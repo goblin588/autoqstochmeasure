@@ -1,7 +1,20 @@
-from hardware.detector import Logic16
+from tomocore.interfaces.logic16 import Logic16, make_antilatch_resetter
 from libraries.settings import (TRIGG_CH, DET_CHS, DUMP_CH, LOOP_CHS, COINCIDENCE_WINDOW,
-                                 DELAYS, THRESHOLDS, BACKGROUND_OFFSET_NS)
+                                 DELAYS, THRESHOLDS, BACKGROUND_OFFSET_NS,
+                                 ANTILATCH_HOST, ANTILATCH_PORT, ANTILATCH_DEVICE_IDS,
+                                 ANTILATCH_BIAS_VOLTAGES)
 import numpy as np
+
+_antilatch_func = make_antilatch_resetter(ANTILATCH_HOST, ANTILATCH_PORT,
+                                          ANTILATCH_DEVICE_IDS, ANTILATCH_BIAS_VOLTAGES)
+
+
+def _open_logic16(**kwargs):
+    """tomocore's Logic16 takes loop_chs/dump_ch/antilatch_func as
+    constructor args instead of reading them from a settings import -- this
+    rig's values (from this file's own settings import above) are wired in
+    here once, so every call site below is unchanged."""
+    return Logic16(loop_chs=LOOP_CHS, dump_ch=DUMP_CH, antilatch_func=_antilatch_func, **kwargs)
 
 def acquire_counts(
     duration: float = 20.0,
@@ -19,7 +32,7 @@ def acquire_counts(
     run slightly over duration, but never includes latched dead time) —
     divide counts by it for rates.
     """
-    with Logic16(coincidence_window=coincidence_window, logic_mode=True,
+    with _open_logic16(coincidence_window=coincidence_window, logic_mode=True,
                  integration_window=duration) as logic:
         logic.configure(threshold=THRESHOLDS, coincidence_window=coincidence_window, delays=delays)
         c_counts, s_counts, int_time = logic.read_counts_integrated(
@@ -53,7 +66,7 @@ def acquire_counts_binned(
     Returns row: acquire_counts()'s dict shape (totals summed across bins)
     plus row['bins'], a list of n_bins per-bin dicts of that same shape.
     """
-    with Logic16(coincidence_window=coincidence_window, logic_mode=True,
+    with _open_logic16(coincidence_window=coincidence_window, logic_mode=True,
                  integration_window=bin_s) as logic:
         logic.configure(threshold=THRESHOLDS, coincidence_window=coincidence_window, delays=delays)
         bins = []
@@ -96,7 +109,7 @@ def acquire_rows(
     keeping the card open between rows. total=None streams until the caller
     stops iterating (e.g. Ctrl-C); otherwise stops once `total` s are counted.
     """
-    with Logic16(coincidence_window=coincidence_window, logic_mode=True,
+    with _open_logic16(coincidence_window=coincidence_window, logic_mode=True,
                  integration_window=integration) as logic:
         logic.configure(threshold=THRESHOLDS, coincidence_window=coincidence_window, delays=delays)
         counted = 0.0
@@ -138,7 +151,7 @@ def stream_herald_and_signal(
           f"{'' if duration is None else f', {duration:.0f}s'}"
           " (Ctrl-C to stop)...")
 
-    with Logic16(coincidence_window=coincidence_window, logic_mode=True,
+    with _open_logic16(coincidence_window=coincidence_window, logic_mode=True,
                  integration_window=1.0) as logic:
         logic.configure(threshold=THRESHOLDS, coincidence_window=coincidence_window, delays=delays)
 
@@ -179,7 +192,7 @@ def stream_channels_with_delays(
     print(f"Scanning coincidences: herald ch {herald_ch} vs signal chs {signal_chs}")
     print(f"Delays (ns): { {ch: delays[ch - 1] for ch in signal_chs} }")
 
-    with Logic16(
+    with _open_logic16(
         coincidence_window=coincidence_window,
         logic_mode=True,
         integration_window=integration_window,
@@ -282,7 +295,7 @@ def tune_delays(
     min_bar = None
     background = None
     changes = {}
-    with Logic16(coincidence_window=windows[0], logic_mode=True,
+    with _open_logic16(coincidence_window=windows[0], logic_mode=True,
                  integration_window=integration_time or 10.0) as logic:
         logic.configure(threshold=THRESHOLDS, coincidence_window=windows[0])
         print(f"Tuning {len(order)} channels, zooming through windows {windows} ns "
@@ -446,7 +459,7 @@ def coarse_scan(
     delays = st.delays_for()
     if herald_delay is not None:
         delays[herald_ch - 1] = herald_delay
-    with Logic16(coincidence_window=COINCIDENCE_WINDOW, logic_mode=True,
+    with _open_logic16(coincidence_window=COINCIDENCE_WINDOW, logic_mode=True,
                  integration_window=scan_integration) as logic:
         logic.configure(threshold=THRESHOLDS, coincidence_window=COINCIDENCE_WINDOW)
         best_delay, best_counts = delays[ch - 1], -1.0
@@ -525,7 +538,7 @@ def scan_and_record(
     delays = st.delays_for()
     if herald_delay is not None:
         delays[herald_ch - 1] = herald_delay
-    with Logic16(coincidence_window=COINCIDENCE_WINDOW, logic_mode=True,
+    with _open_logic16(coincidence_window=COINCIDENCE_WINDOW, logic_mode=True,
                  integration_window=scan_integration) as logic:
         logic.configure(threshold=THRESHOLDS, coincidence_window=COINCIDENCE_WINDOW)
 
@@ -612,7 +625,7 @@ def measure_background(
     delays[herald_ch - 1] = herald_delay
     bg_delay = peak_delay + offset
     delays[ch - 1] = bg_delay
-    with Logic16(coincidence_window=COINCIDENCE_WINDOW, logic_mode=True,
+    with _open_logic16(coincidence_window=COINCIDENCE_WINDOW, logic_mode=True,
                  integration_window=bin_s) as logic:
         logic.configure(threshold=THRESHOLDS, coincidence_window=COINCIDENCE_WINDOW)
         logic.set_delays(delays)
@@ -703,7 +716,7 @@ def find_delay_window(
         print(f"[delay_search] Search range: [{min_delay}, {max_delay}] ns")
         print(f"[delay_search] Window: {init_window} ns → {target_window} ns\n")
 
-    with Logic16(
+    with _open_logic16(
         coincidence_window=coincidence_window,
         logic_mode=True,
         integration_window=integration_time,

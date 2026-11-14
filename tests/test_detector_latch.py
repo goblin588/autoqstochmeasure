@@ -2,32 +2,32 @@
 bin (some channel's singles == 0) must be discarded and retried, not
 accumulated into the returned totals or int_time."""
 import itertools
-import sys
-import types
 
 import numpy as np
 
-# hardware.detector needs pythonnet's `clr` + the TimeTag DLL, both
-# Windows-only — stub them out so the module (and its pure retry logic) can
-# be imported and tested on any platform.
-sys.modules.setdefault('clr', types.SimpleNamespace(AddReference=lambda p: None))
-sys.modules.setdefault('System', types.SimpleNamespace(Int32=int))
-sys.modules.setdefault('TimeTag', types.SimpleNamespace(TTInterface=object, Logic=object))
-sys.modules.setdefault('libraries.settings', types.SimpleNamespace(
-    ANTILATCH_HOST='x', ANTILATCH_PORT=1, ANTILATCH_DEVICE_IDS=[0], ANTILATCH_BIAS_VOLTAGES=[{}],
-    LOOP_CHS=[4, 6, 8, 10, 12, 14], DUMP_CH=7))
+# tomocore.interfaces.logic16's Logic16 only touches pythonnet/clr/the vendor
+# DLL inside __init__, which _FakeLogic16 below bypasses entirely -- so
+# unlike the old hardware.detector, no clr/System/TimeTag/settings stubbing
+# is needed just to import and test the pure retry logic.
+import tomocore.interfaces.logic16 as det
 
-import hardware.detector as det
+# Matches this rig's real channel layout (see autoqstochmeasure's own
+# settings.py), passed explicitly now that Logic16 takes loop_chs/dump_ch as
+# constructor args instead of importing them from a settings module.
+_LOOP_CHS = (4, 6, 8, 10, 12, 14)
+_DUMP_CH = 7
 
 
 class _FakeLogic16(det.Logic16):
     """Bypasses __init__ (no real card) and feeds canned reads in order."""
-    def __init__(self, reads, integration_window=1.0):
+    def __init__(self, reads, integration_window=1.0, loop_chs=_LOOP_CHS, dump_ch=_DUMP_CH):
         self._reads = list(reads)
         self._integration_window = integration_window
         self.singles = None
         self.antilatch_func = lambda: None  # no real network ping
         self._antilatch_thread = None
+        self._loop_chs = set(loop_chs)
+        self._dump_ch = dump_ch
 
     def read_counts(self, pos_coincidence, pos_singles, neg_singles=[0]):
         c, s = self._reads.pop(0)

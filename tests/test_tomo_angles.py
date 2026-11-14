@@ -1,8 +1,8 @@
 """Regression check for the R/L swap bug: _set_tomo_stages (measurement.py)
 must analyze with tomo_angles, not basis_angles, or R and L get swapped."""
 import numpy as np
-from libraries.basis_vectors import basis_angles, tomo_angles
-from libraries.optics import HWP, QWP
+from tomocore.basis_vectors import basis_angles, tomo_angles
+from tomocore.optics import HWP, QWP
 
 H = np.array([[1], [0]], dtype=complex)
 R = (H - 1j * np.array([[0], [1]], dtype=complex)) / np.sqrt(2)

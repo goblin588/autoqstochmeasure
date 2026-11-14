@@ -1,9 +1,9 @@
 """
 Manually set waveplate stage pairs to a named basis or specific angles.
 """
-import libraries.tomography as tl
-from libraries.basis_vectors import basis_angles, tomo_angles
-from libraries.settings import (HWP_IN, QWP_IN, HWP_IN_2, QWP_IN_2,
+import tomocore.tomography as tl
+from tomocore.basis_vectors import basis_angles, tomo_angles
+from tomocore.settings import (HWP_IN, QWP_IN, HWP_IN_2, QWP_IN_2,
                                  HWP_TOM_DUMP, QWP_TOM_DUMP,
                                  HWP_TOM_1, QWP_TOM_1, HWP_OUT_2, QWP_OUT_2,
                                  HWP_1, QWP_1, HWP_12, QWP_12,

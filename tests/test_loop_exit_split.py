@@ -2,8 +2,8 @@
 everything else at 0 must give an equal path1(exit)/path2(loop) split via
 getUnitary; 45 on HWP_12 gives a deterministic all-exit split instead."""
 import numpy as np
-from libraries.plotting import getUnitary
-from libraries.basis_vectors import basis_vectors
+from tomocore.theory import getUnitary
+from tomocore.basis_vectors import basis_vectors
 
 Hin = basis_vectors['H']
 M1, M2, M3 = 3.16, 3.77, 3.74  # real fixed mirror phases, from the U_3..U_6 presets

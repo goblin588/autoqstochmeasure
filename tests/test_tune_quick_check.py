@@ -6,10 +6,6 @@ import types
 
 import numpy as np
 
-sys.modules.setdefault('clr', types.SimpleNamespace(AddReference=lambda p: None))
-sys.modules.setdefault('System', types.SimpleNamespace(Int32=int))
-sys.modules.setdefault('TimeTag', types.SimpleNamespace(TTInterface=object, Logic=object))
-
 _settings_stub = types.SimpleNamespace(
     ANTILATCH_HOST='x', ANTILATCH_PORT=1, ANTILATCH_DEVICE_IDS=[0], ANTILATCH_BIAS_VOLTAGES=[{}],
     TRIGG_CH=1, DET_CHS=[2], DUMP_CH=7, LOOP_CHS=[2], COINCIDENCE_WINDOW=1.0,
@@ -23,7 +19,7 @@ _settings_stub = types.SimpleNamespace(
 sys.modules['libraries.settings'] = _settings_stub
 
 import libraries.countingcard as cc
-import hardware.detector as det
+import tomocore.interfaces.logic16 as det
 
 
 class _FakeLogic16(det.Logic16):
