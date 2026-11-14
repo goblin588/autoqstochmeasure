@@ -1,27 +1,22 @@
 
 """
-Hardware settings
+Counting-card / stochastic-measurement settings.
+
+Waveplate stage calibration (the Waveplate class, stage IDs, optical axes)
+and COMPORT/SIM_MODE now live in tomocore.settings, since autotomo and
+autoqstochmeasure drive the same physical waveplate bench. Everything in
+this file is specific to this rig's counting card / experiment config.
 """
 
 import json
 import os
 from pathlib import Path
 
-class Waveplate:
-    def __init__(self, id, oa=0):
-        self.ID = id
-        self.OA = oa
-
-    def setOA(self, oa):
-        self.OA = oa
-
-COMPORT = 'COM6' if os.name == 'nt' else '/dev/ttyUSB1'
 # Photon switch (pulse-timing/gating board, see ../optical_switch) -- serial,
 # same PC as everything else, different port from the SMC100 stages'
 # COMPORT. Confirm/correct this against the real port (Device Manager on
 # Windows) before relying on it; placeholder for now.
 SWITCH_PORT = os.environ.get('SWITCH_PORT', 'COM8' if os.name == 'nt' else '/dev/ttyUSB0')
-SIM_MODE = os.environ.get('AUTOTOMO_SIM', '0') == '1'
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 # Where measurement() / calibrate_background() write their output. Point this
@@ -29,32 +24,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 # of the local, gitignored data/ folder.
 DATA_DIR = PROJECT_ROOT / "data"
 FIG_DIR = DATA_DIR / "Figures"
-
-# WAVEPLATES: stage number + optical axis (deg)
-WAVEPLATES = {
-    'HWP_IN':       {'stage': 6,  'oa': 54.57 + 45},  # +45: true input polarisation is V, not H (basis_angles assumes H)
-    'QWP_IN':       {'stage': 8,  'oa': 3},
-    'HWP_IN_2':     {'stage': 1,  'oa': 29.24},
-    'QWP_IN_2':     {'stage': 7,  'oa': 131.32},
-    'HWP_TOM_1':    {'stage': 4,  'oa': 41.5},
-    'QWP_TOM_1':    {'stage': 21, 'oa': 107.58},  # was 9; that ID now belongs to QWP_12
-    'HWP_OUT_2':    {'stage': 14, 'oa': 13},
-    'QWP_OUT_2':    {'stage': 12, 'oa': 12.5},
-    'HWP_TOM_DUMP': {'stage': 11, 'oa': 35.5},
-    'QWP_TOM_DUMP': {'stage': 13, 'oa': 73},
-    # Interferometer plates (realise the h1/q1/h2/q2 angles in getUnitary,
-    # previously fixed/manual, now motorised).
-    'HWP_1':        {'stage': 17, 'oa': 84.31},
-    'QWP_1':        {'stage': 10, 'oa': 353.3},
-    'HWP_12':       {'stage': 18, 'oa': 16.28},
-    'QWP_12':       {'stage': 9,  'oa': 170.63},
-}
-
-# Bind each entry as a module-level Waveplate (HWP_IN, QWP_IN, ...) so
-# `from libraries.settings import HWP_IN` keeps working everywhere.
-for _name, _cfg in WAVEPLATES.items():
-    globals()[_name] = Waveplate(_cfg['stage'], _cfg['oa'])
-
 
 # CC CHANNELS: delay (ns) + input threshold (V) per channel.
 # Herald on ch3; loop-k "1" outputs on ch4/6/8/10/12/14; dump on ch7.

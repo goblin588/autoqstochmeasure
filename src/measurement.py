@@ -2,7 +2,7 @@
 Prepare the s0 process state for a chosen unitary N:
 sets HWP_IN/QWP_IN to s0_N and the fixed waveplates (IN_2/OUT_2) to that U's angles.
 
-Run with AUTOTOMO_SIM=1 or --sim for mock hardware.
+Run with TOMOCORE_SIM=1 or --sim for mock hardware.
 Run with DUMP_ENABLED=0 or --no-dump if the dump detector isn't connected.
 """
 import csv
@@ -19,49 +19,23 @@ import time
 from pathlib import Path
 
 if '--sim' in sys.argv:
-    os.environ['AUTOTOMO_SIM'] = '1'
+    os.environ['TOMOCORE_SIM'] = '1'
 if '--no-dump' in sys.argv:
     os.environ['DUMP_ENABLED'] = '0'
 
-import libraries.tomography as tl
+import tomocore.tomography as tl
 import libraries.settings as st
-import libraries.plotting as plotting
-from libraries.basis_vectors import process_state_angles, basis_angles, tomo_angles
-from libraries.settings import HWP_IN, QWP_IN, COMPORT, SIM_MODE
-from libraries.waveplate_angles import unitaries_angles
-from libraries.settings import (HWP_IN, QWP_IN, QWP_TOM_DUMP, HWP_TOM_DUMP,
+import tomocore.plotting as plotting
+from tomocore.basis_vectors import process_state_angles, basis_angles, tomo_angles
+from tomocore.settings import (HWP_IN, QWP_IN, QWP_TOM_DUMP, HWP_TOM_DUMP,
                                 HWP_IN_2, QWP_IN_2, HWP_OUT_2, QWP_OUT_2,
                                 HWP_TOM_1, QWP_TOM_1, HWP_1, QWP_1, HWP_12, QWP_12,
-                                COMPORT, SIM_MODE,
-                                DET_CHS, LOOP_CHS, DUMP_CH, TRIGG_CH, delays_for,
+                                COMPORT, SIM_MODE)
+from tomocore.waveplate_angles import unitaries_angles
+from libraries.settings import (DET_CHS, LOOP_CHS, DUMP_CH, TRIGG_CH, delays_for,
                                 ANTILATCH_HOST, ANTILATCH_PORT)
-from libraries.notifier import notify
+from tomocore.notifier import notify
 
-
-def _set_fixed_waveplates(angles, path=None):
-    """Move any fixed-position waveplates that have non-zero angles set.
-
-    The analyzer pair for `path` (TOM_1 for path 1, OUT_2 for path 2) is
-    skipped — the tomo sweep drives it. path=None sets all pairs.
-    """
-    plates = [
-        ('hin2', 'HWP_IN_2',  HWP_IN_2),
-        ('qin2', 'QWP_IN_2',  QWP_IN_2),
-        ('hf2',  'HWP_OUT_2', HWP_OUT_2),
-        ('qf2',  'QWP_OUT_2', QWP_OUT_2),
-        ('hf1',  'HWP_TOM_1', HWP_TOM_1),
-        ('qf1',  'QWP_TOM_1', QWP_TOM_1),
-        ('h1',   'HWP_1',     HWP_1),
-        ('q1',   'QWP_1',     QWP_1),
-        ('h2',   'HWP_12',    HWP_12),
-        ('q2',   'QWP_12',    QWP_12),
-    ]
-    skip = {1: ('hf1', 'qf1'), 2: ('hf2', 'qf2')}.get(path, ())
-    for key, name, stage in plates:
-        if key in skip or angles.get(key) is None:
-            continue
-        print(f"Setting {name} to {angles[key]}°")
-        tl.move_stage(stage, angles[key], COMPORT)
 
 def _set_input_state(N, j=0):
     """Set input state j for process N. defaults to s0_N."""
@@ -93,7 +67,7 @@ def _play_tune():
         winsound.Beep(freq, ms)
 
 def _set_unitary(N):
-    _set_fixed_waveplates(unitaries_angles[N])
+    tl.set_fixed_waveplates(unitaries_angles[N])
     _beep()
     print("UNITARY READY")
 
@@ -1036,7 +1010,7 @@ def _tomo_path1(N, labels, set_input, duration):
     """The loop's first-tap output (LOOP_CHS[0]) via TOM_1, OUT_2 fixed at
     the U-angle — the gate output that feeds the loop.
     Returns {input_label: {output_basis: (count, err)}}."""
-    _set_fixed_waveplates(unitaries_angles[N], path=1)
+    tl.set_fixed_waveplates(unitaries_angles[N], path=1)
     _beep()
     data = {}
     for label in labels:
@@ -1054,7 +1028,7 @@ def _tomo_path2(N, labels, set_input, duration, loop=1):
     delay is swapped to DUMP_DELAYS[loop] (loop=1 pairs with path 1's
     LOOP_CHS[0]/loop-1 reading) for the duration, then restored.
     Returns {input_label: {output_basis: (count, err)}}."""
-    _set_fixed_waveplates(unitaries_angles[N], path=2)
+    tl.set_fixed_waveplates(unitaries_angles[N], path=2)
     normal_dump_delay = st.CHANNELS[DUMP_CH]['delay']
     st.CHANNELS[DUMP_CH]['delay'] = st.DUMP_DELAYS[loop]
     print(f"Dump delay set to {st.DUMP_DELAYS[loop]} ns (dump-after-{loop}-loop, path 2)")
@@ -1169,12 +1143,14 @@ def perform_tomo():
         data1 = _tomo_path1(N, labels, set_input, duration)
         fits[1] = plotting.plot_characterisation(
             data1, graph_title=f'U{N}_path1_ch{LOOP_CHS[0]}',
-            angles=angles, plot_type=f'U{N}_path1', path=1)
+            angles=angles, plot_type=f'U{N}_path1', path=1,
+            raw_unit='counts', raw_scale=1)
     if do2:
         data2 = _tomo_path2(N, labels, set_input, duration)
         fits[2] = plotting.plot_characterisation(
             data2, graph_title=f'U{N}_path2_dump',
-            angles=angles, plot_type=f'U{N}_path2', path=2)
+            angles=angles, plot_type=f'U{N}_path2', path=2,
+            raw_unit='counts', raw_scale=1)
 
     print("  |  ".join(f"path{p} fit residual: {fit:.4f}" for p, fit in fits.items()))
     notify(f"Tomo U{N} done — " + ", ".join(f"fit{p}={fit:.4f}" for p, fit in fits.items()),
@@ -1259,7 +1235,7 @@ def check_projector():
     d = input("Stream duration in seconds (Enter = stream until Ctrl-C): ").strip()
     duration = float(d) if d else None
 
-    _set_fixed_waveplates(unitaries_angles[N], path=path)
+    tl.set_fixed_waveplates(unitaries_angles[N], path=path)
     set_input(in_label)
 
     if path == 1:
@@ -1318,6 +1294,17 @@ def ping_antilatch():
     return False
 
 
+# tomocore.settings exposes named Waveplate objects, not the old stage/oa
+# dict this used to iterate (st.WAVEPLATES) -- rebuilt locally from those
+# names for this health check.
+_ALL_WAVEPLATES = {
+    'HWP_IN': HWP_IN, 'QWP_IN': QWP_IN, 'HWP_IN_2': HWP_IN_2, 'QWP_IN_2': QWP_IN_2,
+    'HWP_TOM_1': HWP_TOM_1, 'QWP_TOM_1': QWP_TOM_1, 'HWP_OUT_2': HWP_OUT_2, 'QWP_OUT_2': QWP_OUT_2,
+    'HWP_TOM_DUMP': HWP_TOM_DUMP, 'QWP_TOM_DUMP': QWP_TOM_DUMP,
+    'HWP_1': HWP_1, 'QWP_1': QWP_1, 'HWP_12': HWP_12, 'QWP_12': QWP_12,
+}
+
+
 def _test_waveplates():
     """Open one SMC100 connection and query every known waveplate's status
     (TS?, read-only -- nothing moves) -- same primitive as home_stages.py's
@@ -1326,25 +1313,25 @@ def _test_waveplates():
     (ok_count, total_count)."""
     if SIM_MODE:
         print("  [SIM MODE] waveplates skipped")
-        return len(st.WAVEPLATES), len(st.WAVEPLATES)
+        return len(_ALL_WAVEPLATES), len(_ALL_WAVEPLATES)
 
-    import interfaces.smc100 as smc
+    import tomocore.interfaces.smc100 as smc
     ok = 0
     try:
         conn = smc.SMC100Connection(port=COMPORT)
     except Exception as e:
         print(f"  Waveplates: CONNECT FAILED to {COMPORT} ({e}) -- can't reach any stage")
-        return 0, len(st.WAVEPLATES)
+        return 0, len(_ALL_WAVEPLATES)
     with conn:
-        for name, cfg in st.WAVEPLATES.items():
+        for name, wp in _ALL_WAVEPLATES.items():
             try:
-                stage = smc.SMC100Stage(conn, smcID=cfg['stage'])
+                stage = smc.SMC100Stage(conn, smcID=wp.ID)
                 stage.get_status()
-                print(f"  {name} (stage {cfg['stage']}): OK")
+                print(f"  {name} (stage {wp.ID}): OK")
                 ok += 1
             except Exception as e:
-                print(f"  {name} (stage {cfg['stage']}): NO RESPONSE ({e})")
-    return ok, len(st.WAVEPLATES)
+                print(f"  {name} (stage {wp.ID}): NO RESPONSE ({e})")
+    return ok, len(_ALL_WAVEPLATES)
 
 
 def _test_switch():
