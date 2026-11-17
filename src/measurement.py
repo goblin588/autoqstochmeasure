@@ -262,18 +262,24 @@ def _save_results(rows, N, label, background=None, angles=None):
     rate.
 
     Timestamp leads so filenames sort most-recent-last (ls default order).
-    Called from finally — saves whatever rows exist even mid-sweep.
+    Called from finally — saves whatever rows exist even mid-sweep. Writes
+    the .json sidecar (angles/background/calibration snapshot) even with
+    zero rows -- e.g. interrupted before the per-row loop ever started --
+    so that context isn't silently lost; only the .csv is skipped then.
     """
-    if not rows:
+    if not rows and not angles and background is None:
         print("No data to save")
         return
     os.makedirs(st.DATA_DIR, exist_ok=True)
     stem = f"{st.DATA_DIR}/{datetime.datetime.now():%Y%m%d_%H%M%S}_measurement_N{N}_s{label}"
-    fields = list(dict.fromkeys(k for r in rows for k in r))
-    with open(f"{stem}.csv", 'w', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=fields)
-        writer.writeheader()
-        writer.writerows(rows)
+    if rows:
+        fields = list(dict.fromkeys(k for r in rows for k in r))
+        with open(f"{stem}.csv", 'w', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(rows)
+    else:
+        print("No rows collected -- saving angles/background/calibration metadata only")
 
     calibration = _latest_calibration()
     noise_calibration = None
@@ -324,7 +330,8 @@ def _save_results(rows, N, label, background=None, angles=None):
     with open(f"{stem}.json", 'w') as f:
         json.dump(meta, f, indent=1)
 
-    print(f"Saved {len(rows)} rows -> {stem}.csv (+ {stem}.json)")
+    csv_part = f"{stem}.csv (+ {stem}.json)" if rows else f"{stem}.json (no .csv -- no rows)"
+    print(f"Saved {len(rows)} rows -> {csv_part}")
     if calibration:
         print(f"Most recent calibration: {calibration.name} ({_calibration_date(calibration)})")
     else:
@@ -992,17 +999,14 @@ def measurement(N, performTomo=False, js=None, duration_s=None, auto=False):
             if input("Press Enter to begin, or c to change the duration: ").strip().lower() != 'c':
                 break
 
-    angle_log = [{'setting': 'unitary', **_set_unitary(N)}]
-
-    print(f"Measuring background (+{st.MEASUREMENT_BG_OFFSET_NS:.0f}ns off tuned delays, "
-          f"{st.MEASUREMENT_BG_N_BINS} x {st.MEASUREMENT_BG_BIN_S:.0f}s bins)...")
-    background = _acquire_background(N)
-    print(f"  {background}")
-
-    start = time.monotonic()
-
+    # angle_log/background/rows start empty and start's taken now, rather
+    # than after the unitary/background steps below, so a Ctrl-C (or any
+    # other exception) during THOSE steps -- not just the per-row loop --
+    # still reaches _save_results in finally with whatever's true so far.
+    angle_log = []
+    background = None
     rows = []
-    print("\n\n")
+    start = time.monotonic()
 
     def collect(j, basis, duration):
         for counts in _acquire_rows(N, duration):
@@ -1012,6 +1016,14 @@ def measurement(N, performTomo=False, js=None, duration_s=None, auto=False):
             print(f"[s{j} {basis or 'no-tomo'}] {counts}", end="\r", flush=True)
 
     try:
+        angle_log.append({'setting': 'unitary', **_set_unitary(N)})
+
+        print(f"Measuring background (+{st.MEASUREMENT_BG_OFFSET_NS:.0f}ns off tuned delays, "
+              f"{st.MEASUREMENT_BG_N_BINS} x {st.MEASUREMENT_BG_BIN_S:.0f}s bins)...")
+        background = _acquire_background(N)
+        print(f"  {background}")
+        print("\n\n")
+
         if not round_robin:
             for j in js:
                 state_angles = _set_input_state(N, j)
