@@ -212,6 +212,30 @@ def stream_channels_with_delays(
 TUNE_WINDOWS_NS = (3.0, 1.0, 0.5, 0.25)  # fixed zoom sequence — finer than 0.25 ns just chases noise
 
 
+def _peak_offset(counts: np.ndarray, offsets: np.ndarray, step: float) -> tuple[float, int]:
+    """Sub-step peak location via 3-point parabolic interpolation around the
+    raw argmax, instead of just taking whichever bin happened to read
+    highest. Later loop channels (ch8+) have few enough counts that shot
+    noise can tip the winner to a neighbouring bin -- fitting a parabola to
+    the peak and its two flanking points recovers a sub-step estimate of
+    the true peak instead of being locked to a step-sized grid. Falls back
+    to the raw bin at either edge (no second neighbour to fit) or if the
+    three points are already flat (deadband, division would blow up).
+
+    Returns (offset, raw_idx) -- raw_idx is the untouched argmax, still
+    used by callers for the existing edge/peak-height checks.
+    """
+    idx = int(np.argmax(counts))
+    if 0 < idx < len(counts) - 1:
+        left, center, right = counts[idx - 1], counts[idx], counts[idx + 1]
+        denom = left - 2 * center + right
+        if denom != 0:
+            delta = 0.5 * (left - right) / denom
+            delta = max(-1.0, min(1.0, delta))  # never jump past a neighbouring bin
+            return float(offsets[idx] + delta * step), idx
+    return float(offsets[idx]), idx
+
+
 def tune_delays(
     step: float = 1.0,
     span: float = 10.0,
@@ -333,8 +357,8 @@ def tune_delays(
                 # hasn't drifted -- skip the full zoom below.
                 quick_offsets = np.arange(-5 * step, 5 * step + step / 2, step)
                 counts = scan(ch, delays, current, quick_offsets, windows[0], base_integration)
-                best_idx = int(np.argmax(counts))
-                best = float(current + quick_offsets[best_idx])
+                interp_offset, best_idx = _peak_offset(counts, quick_offsets, step)
+                best = float(current + interp_offset)
                 peak_counts = float(counts[best_idx])
                 found_window = windows[0]
 
@@ -359,8 +383,8 @@ def tune_delays(
                         pass_integration = base_integration * (2 if window <= small_window_ns else 1)
                         offsets = np.arange(-scan_span, scan_span + scan_step / 2, scan_step)
                         counts = scan(ch, delays, best, offsets, window, pass_integration)
-                        best_idx = int(np.argmax(counts))
-                        best = float(best + offsets[best_idx])
+                        interp_offset, best_idx = _peak_offset(counts, offsets, scan_step)
+                        best = float(best + interp_offset)
                         peak_counts = float(counts[best_idx])
 
                         if first_pass:
