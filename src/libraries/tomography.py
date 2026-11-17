@@ -48,11 +48,15 @@ def single_tomography(qwp, hwp, powermeter, smc_port) -> dict:
     return res
 
 
-def move_stage(this_stage, angle: float, smc_port: str) -> None:
+def move_stage(this_stage, angle: float, smc_port: str) -> float:
+    """Moves the stage and returns the CONFIRMED angle read back from the
+    controller afterward (TP query), not just the commanded one -- lets a
+    caller check what the waveplate actually ended up at."""
     with _Connection(port=smc_port) as stages:
         stage = _Stage(stages, smcID=this_stage.ID)
         stage.enable()
         try:
             stage.move_absolute(angle + this_stage.OA)
+            return stage.get_position() - this_stage.OA
         finally:
             stage.disable()
