@@ -38,20 +38,24 @@ from tomocore.notifier import notify
 
 
 def _set_input_state(N, j=0):
-    """Set input state j for process N. defaults to s0_N."""
+    """Set input state j for process N. defaults to s0_N.
+    Returns the confirmed {HWP_IN, QWP_IN} angles read back after moving."""
     hwp_angle, qwp_angle = process_state_angles[f's{j}_{N}']
     print(f"Setting HWP_IN to {hwp_angle}°, QWP_IN to {qwp_angle}° (s{j}_{N})")
-    tl.move_stage(HWP_IN, hwp_angle, COMPORT)
-    tl.move_stage(QWP_IN, qwp_angle, COMPORT)
+    hwp_pos = tl.move_stage(HWP_IN, hwp_angle, COMPORT)
+    qwp_pos = tl.move_stage(QWP_IN, qwp_angle, COMPORT)
     print(f"(s{j}_{N}) READY")
+    return {'HWP_IN': hwp_pos, 'QWP_IN': qwp_pos}
 
 def _set_input_basis(basis):
     """Set input polarisation to a named H/V/A/D/R/L basis (generic gate
-    tomography — distinct from _set_input_state's process-specific s_j prep)."""
+    tomography — distinct from _set_input_state's process-specific s_j prep).
+    Returns the confirmed {HWP_IN, QWP_IN} angles read back after moving."""
     hwp_angle, qwp_angle = basis_angles[basis]
-    tl.move_stage(HWP_IN, hwp_angle, COMPORT)
-    tl.move_stage(QWP_IN, qwp_angle, COMPORT)
+    hwp_pos = tl.move_stage(HWP_IN, hwp_angle, COMPORT)
+    qwp_pos = tl.move_stage(QWP_IN, qwp_angle, COMPORT)
     print(f"Input set to |{basis}>")
+    return {'HWP_IN': hwp_pos, 'QWP_IN': qwp_pos}
 
 def _beep():
     print('\a', end='', flush=True)
@@ -67,14 +71,19 @@ def _play_tune():
         winsound.Beep(freq, ms)
 
 def _set_unitary(N):
-    tl.set_fixed_waveplates(unitaries_angles[N])
+    """Returns the confirmed fixed-waveplate angles read back after moving
+    (see tomocore.tomography.set_fixed_waveplates)."""
+    confirmed = tl.set_fixed_waveplates(unitaries_angles[N])
     _beep()
     print("UNITARY READY")
+    return confirmed
 
 def _set_tomo_stages(HWP, QWP, basis):
-    """ For tomo ordering QWP -> HWP """
-    tl.move_stage(HWP, tomo_angles[basis][0], COMPORT)
-    tl.move_stage(QWP, tomo_angles[basis][1], COMPORT)
+    """For tomo ordering QWP -> HWP.
+    Returns the confirmed {HWP, QWP} angles read back after moving."""
+    hwp_pos = tl.move_stage(HWP, tomo_angles[basis][0], COMPORT)
+    qwp_pos = tl.move_stage(QWP, tomo_angles[basis][1], COMPORT)
+    return {'HWP': hwp_pos, 'QWP': qwp_pos}
 
 
 def _sim_row(duration, chs=DET_CHS):
@@ -176,7 +185,7 @@ def _git_commit():
         return None
 
 
-def _save_results(rows, N, label, background=None):
+def _save_results(rows, N, label, background=None, angles=None):
     """Write rows to data/{timestamp}_measurement_N{N}_s{label}.csv, plus a
     same-named .json sidecar recording the delays/thresholds/etc. in effect
     for the run — so old data stays interpretable after later recalibration.
@@ -185,6 +194,14 @@ def _save_results(rows, N, label, background=None):
     this run, if any — stored alongside so each measurement carries its own
     accidental-coincidence floor rather than relying only on the separate
     noise_calibration pointer.
+
+    angles is measurement()'s angle_log: one entry per waveplate move
+    actually made (the unitary's fixed waveplates, then one entry per
+    input-state/basis setting visited), each holding the CONFIRMED angle
+    read back from the SMC100 controller after the move completed — not
+    just what was commanded. Lets a later divergence between runs be
+    checked against what the waveplates actually were, instead of assuming
+    the angle tables were followed correctly.
 
     noise_calibration is the *entire* contents of the most recent
     data/*_noise_calibration.json (plus a 'file' key naming it), copied in
@@ -257,6 +274,7 @@ def _save_results(rows, N, label, background=None):
         'background_offset_ns': st.MEASUREMENT_BG_OFFSET_NS,
         'background': background,
         'loss_calibration': loss_calibration,
+        'angles': angles,
     }
     with open(f"{stem}.json", 'w') as f:
         json.dump(meta, f, indent=1)
@@ -299,12 +317,18 @@ def _acquire_counts_all(duration, delays=None):
                            delays=delays if delays is not None else delays_for())
 
 
-def _record_all_channels(n_bins=20, bin_s=5.0):
-    """20x5s binned coincidence counts on every channel (LOOP_CHS+DUMP_CH)
+def _record_all_channels(n_bins=40, bin_s=5.0):
+    """40x5s binned coincidence counts on every channel (LOOP_CHS+DUMP_CH)
     at their pre-tuned delays — same primitive as _acquire_background, no
     scan needed. Every channel's counts ride along in one row so a
     miscalibrated waveplate angle shows up as signal in the wrong channel
-    instead of silently vanishing."""
+    instead of silently vanishing.
+
+    n_bins=40 (200s total) rather than 20 (100s) -- the loop0/loop1/5050
+    loss-calibration stages all use this default unchanged, and T's SEM
+    (std across bins / sqrt(n_bins)) was the single biggest source of
+    uncertainty in the final R_KL rate, bigger than the shape-match to
+    theory (2026-11-17 U3 analysis)."""
     if SIM_MODE:
         row = _sim_row(bin_s * n_bins, DET_CHS)
         row['bins'] = [_sim_row(bin_s, DET_CHS) for _ in range(n_bins)]
@@ -584,9 +608,9 @@ def calibrate_loss(run_stages=None):
     with those stages since they needed physically unplugging fibers, which
     rules out unattended use.)
 
-    Every stage's peak recording is 20 x 5s bins rather than one long read —
+    Every stage's peak recording is 40 x 5s bins rather than one long read —
     the per-bin counts are kept on file, and losses/rates are reported as
-    mean +/- SEM (std/sqrt(20)), with errors propagated through the ratio
+    mean +/- SEM (std/sqrt(40)), with errors propagated through the ratio
     (relative errors combine in quadrature). Every losses/rates key has an
     "_err" companion.
 
@@ -843,10 +867,15 @@ def _format_duration(seconds):
 
 
 def _apply_setting(N, j, basis):
-    _set_input_state(N, j)
+    """Returns the confirmed angles for this (j, basis) setting, keyed by
+    stage name -- see measurement()'s angle_log."""
+    entry = _set_input_state(N, j)
     if basis is not None:
-        _set_tomo_stages(HWP=HWP_TOM_1, QWP=QWP_TOM_1, basis=basis)
-        _set_tomo_stages(HWP=HWP_TOM_DUMP, QWP=QWP_TOM_DUMP, basis=basis)
+        tomo1 = _set_tomo_stages(HWP=HWP_TOM_1, QWP=QWP_TOM_1, basis=basis)
+        tomo_dump = _set_tomo_stages(HWP=HWP_TOM_DUMP, QWP=QWP_TOM_DUMP, basis=basis)
+        entry.update({'HWP_TOM_1': tomo1['HWP'], 'QWP_TOM_1': tomo1['QWP'],
+                      'HWP_TOM_DUMP': tomo_dump['HWP'], 'QWP_TOM_DUMP': tomo_dump['QWP']})
+    return entry
 
 
 def _should_round_robin(total, n_settings):
@@ -924,7 +953,7 @@ def measurement(N, performTomo=False, js=None, duration_s=None, auto=False):
             if input("Press Enter to begin, or c to change the duration: ").strip().lower() != 'c':
                 break
 
-    _set_unitary(N)
+    angle_log = [{'setting': 'unitary', **_set_unitary(N)}]
 
     print(f"Measuring background (+{st.MEASUREMENT_BG_OFFSET_NS:.0f}ns off tuned delays, "
           f"{st.MEASUREMENT_BG_N_BINS} x {st.MEASUREMENT_BG_BIN_S:.0f}s bins)...")
@@ -946,22 +975,27 @@ def measurement(N, performTomo=False, js=None, duration_s=None, auto=False):
     try:
         if not round_robin:
             for j in js:
-                _set_input_state(N, j)
+                state_angles = _set_input_state(N, j)
                 for basis in bases:
+                    entry = {'setting': f's{j}', 'input_state': j, 'basis': basis, **state_angles}
                     if basis is not None:
-                        _set_tomo_stages(HWP=HWP_TOM_1, QWP=QWP_TOM_1, basis=basis)
-                        _set_tomo_stages(HWP=HWP_TOM_DUMP, QWP=QWP_TOM_DUMP, basis=basis)
+                        tomo1 = _set_tomo_stages(HWP=HWP_TOM_1, QWP=QWP_TOM_1, basis=basis)
+                        tomo_dump = _set_tomo_stages(HWP=HWP_TOM_DUMP, QWP=QWP_TOM_DUMP, basis=basis)
+                        entry.update({'HWP_TOM_1': tomo1['HWP'], 'QWP_TOM_1': tomo1['QWP'],
+                                      'HWP_TOM_DUMP': tomo_dump['HWP'], 'QWP_TOM_DUMP': tomo_dump['QWP']})
+                    angle_log.append(entry)
                     collect(j, basis, total)
         else:
             for j, basis, chunk in _round_robin_plan(settings, total, st.ROUND_ROBIN_COLLECTION_TIME_S):
-                _apply_setting(N, j, basis)
+                setting_angles = _apply_setting(N, j, basis)
+                angle_log.append({'setting': f's{j}', 'input_state': j, 'basis': basis, **setting_angles})
                 collect(j, basis, chunk)
     except KeyboardInterrupt:
         print("\nStopped — saving what we have")
     finally:
         # runs on success, error, or Ctrl-C — partial data still gets saved
         label = 'all' if js == _input_states(N) else '-'.join(map(str, js)) if len(js) > 1 else js[0]
-        _save_results(rows, N, label, background=background)
+        _save_results(rows, N, label, background=background, angles=angle_log)
         notify(f"Measurement N={N} done ({len(rows)} rows)",
                title="Measurement Complete", priority="high")
         if time.monotonic() - start > 300:
@@ -1643,6 +1677,8 @@ def _run_queue_step(step):
             print("[SIM MODE] delay tuning needs hardware -- skipping")
             return
         from libraries.countingcard import tune_delays
+        _set_unitary('6')
+        _set_input_state('6', 0)
         tune_delays(signal_chs=step.get('signal_chs') or LOOP_CHS,
                     integration_time=step.get('integration_time'),
                     auto_save=True)
@@ -1784,6 +1820,11 @@ def main():
                 else:
                     from libraries.countingcard import tune_delays
                     from libraries.settings import LOOP_CHS, DUMP_CH
+                    # U6 exits with non-negligible probability at every loop
+                    # pass, so tuning sees counts on all of LOOP_CHS at once
+                    # instead of needing a different preset per channel.
+                    _set_unitary('6')
+                    _set_input_state('6', 0)
                     chs = input(f"Channel(s) to tune, comma-separated "
                                 f"(Enter = all {LOOP_CHS}; include {DUMP_CH} to also tune the dump, "
                                 f"fixed regardless of process N): ").strip()
