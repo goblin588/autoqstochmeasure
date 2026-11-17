@@ -689,10 +689,14 @@ def calibrate_loss(run_stages=None):
     across separate queue steps resumes/accumulates via the loss-calibration
     file exactly like the interactive menu does.
     """
-    path, existing = _find_latest_loss_calibration()
+    found_path, existing = _find_latest_loss_calibration()
     stages = dict(existing.get('stages', {}))
     if stages:
-        print(f"Found an existing loss calibration ({path.name}) — stages on file: {', '.join(stages)}.")
+        print(f"Found an existing loss calibration ({found_path.name}) — stages on file: {', '.join(stages)}.")
+
+    # Always write to a fresh timestamped file this run -- same convention
+    # as every other saved file here -- rather than overwriting found_path.
+    path = None
 
     def _save(losses=None, rates=None):
         nonlocal path
