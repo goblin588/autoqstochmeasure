@@ -1590,6 +1590,11 @@ def _run_queue_step(step):
             print("[SIM MODE] delay tuning needs hardware -- skipping")
             return
         from libraries.countingcard import tune_delays
+        # U6 exits with non-negligible probability at every loop pass, so
+        # tuning sees counts on all of LOOP_CHS at once instead of needing
+        # a different preset per channel.
+        _set_unitary('6')
+        _set_input_state('6', 0)
         tune_delays(signal_chs=step.get('signal_chs') or LOOP_CHS,
                     integration_time=step.get('integration_time'),
                     auto_save=True)
@@ -1731,6 +1736,11 @@ def main():
                 else:
                     from libraries.countingcard import tune_delays
                     from libraries.settings import LOOP_CHS, DUMP_CH
+                    # U6 exits with non-negligible probability at every loop
+                    # pass, so tuning sees counts on all of LOOP_CHS at once
+                    # instead of needing a different preset per channel.
+                    _set_unitary('6')
+                    _set_input_state('6', 0)
                     chs = input(f"Channel(s) to tune, comma-separated "
                                 f"(Enter = all {LOOP_CHS}; include {DUMP_CH} to also tune the dump, "
                                 f"fixed regardless of process N): ").strip()
