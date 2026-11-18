@@ -703,9 +703,16 @@ def _tune_delays_peaked(signal_chs, integration_time=None, auto_save=False):
     pass (_set_bypass_optics/_set_loop_optics/_set_loop{3,4,5,6}_optics) --
     far stronger, cleaner signal than the one-size-fits-all U6/s0 preset
     used to give any single channel. Falls back to U6/s0 for any channel
-    without a dedicated peak-optics setter (currently just DUMP_CH)."""
+    without a dedicated peak-optics setter (currently just DUMP_CH).
+
+    tune_delays() asks to save after every call it's given -- calling it
+    once per channel here would ask once per channel. Every channel but
+    the last auto-saves instead (so progress survives a Ctrl-C/crash
+    partway through without prompting anyone); the last one uses
+    auto_save as given, so an interactive caller is asked exactly once,
+    at the end, covering every channel tuned in this call."""
     from libraries.countingcard import tune_delays
-    for ch in signal_chs:
+    for i, ch in enumerate(signal_chs):
         setter = _LOOP_PEAK_OPTICS.get(ch)
         if setter is not None:
             print(f"--- ch{ch}: applying its peak-optics preset ---")
@@ -714,7 +721,9 @@ def _tune_delays_peaked(signal_chs, integration_time=None, auto_save=False):
             print(f"--- ch{ch}: no dedicated peak-optics preset, falling back to U6/s0 ---")
             _set_unitary('6')
             _set_input_state('6', 0)
-        tune_delays(signal_chs=[ch], integration_time=integration_time, auto_save=auto_save)
+        is_last = i == len(signal_chs) - 1
+        tune_delays(signal_chs=[ch], integration_time=integration_time,
+                    auto_save=auto_save if is_last else True)
 
 
 def _loss_stage_date(stages, key):

@@ -44,6 +44,21 @@ def test_each_loop_channel_gets_its_own_preset(monkeypatch):
     assert _calls == [((ch,), 2.0, True) for ch in (4, 6, 8, 10, 12, 14)]
 
 
+def test_only_last_channel_can_prompt_to_save(monkeypatch):
+    # tune_delays() itself asks "save?" whenever auto_save is falsy --
+    # calling it once per channel must not ask once per channel. Every
+    # channel but the last always auto-saves; the last uses auto_save as
+    # given, so an interactive caller (auto_save=False) is asked exactly
+    # once, covering every channel just tuned.
+    for ch, fn in list(m._LOOP_PEAK_OPTICS.items()):
+        monkeypatch.setitem(m._LOOP_PEAK_OPTICS, ch, lambda orig=fn: orig())
+
+    _calls.clear()
+    m._tune_delays_peaked([4, 6, 8], integration_time=2.0, auto_save=False)
+
+    assert _calls == [((4,), 2.0, True), ((6,), 2.0, True), ((8,), 2.0, False)]
+
+
 def test_dump_channel_falls_back_to_u6_s0(monkeypatch):
     seeded = []
     monkeypatch.setattr(m, '_set_unitary', lambda N: seeded.append(('unitary', N)))
