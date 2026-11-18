@@ -691,6 +691,32 @@ def _set_loop6_optics():
     tl.move_stage(QWP_OUT_2, 103.077, COMPORT)
 
 
+_LOOP_PEAK_OPTICS = {
+    4: _set_bypass_optics, 6: _set_loop_optics, 8: _set_loop3_optics,
+    10: _set_loop4_optics, 12: _set_loop5_optics, 14: _set_loop6_optics,
+}
+
+
+def _tune_delays_peaked(signal_chs, integration_time=None, auto_save=False):
+    """Tune each channel in signal_chs one at a time, each under the
+    optics setting that peaks exit probability at THAT channel's loop
+    pass (_set_bypass_optics/_set_loop_optics/_set_loop{3,4,5,6}_optics) --
+    far stronger, cleaner signal than the one-size-fits-all U6/s0 preset
+    used to give any single channel. Falls back to U6/s0 for any channel
+    without a dedicated peak-optics setter (currently just DUMP_CH)."""
+    from libraries.countingcard import tune_delays
+    for ch in signal_chs:
+        setter = _LOOP_PEAK_OPTICS.get(ch)
+        if setter is not None:
+            print(f"--- ch{ch}: applying its peak-optics preset ---")
+            setter()
+        else:
+            print(f"--- ch{ch}: no dedicated peak-optics preset, falling back to U6/s0 ---")
+            _set_unitary('6')
+            _set_input_state('6', 0)
+        tune_delays(signal_chs=[ch], integration_time=integration_time, auto_save=auto_save)
+
+
 def _loss_stage_date(stages, key):
     """Display date for a loss-calibration stage key. 'loop01' is really
     two underlying stages (loop0+loop1) that are always run together now
@@ -1703,15 +1729,9 @@ def _run_queue_step(step):
             # counting card even to import (pythonnet/TimeTag).
             print("[SIM MODE] delay tuning needs hardware -- skipping")
             return
-        from libraries.countingcard import tune_delays
-        # U6 exits with non-negligible probability at every loop pass, so
-        # tuning sees counts on all of LOOP_CHS at once instead of needing
-        # a different preset per channel.
-        _set_unitary('6')
-        _set_input_state('6', 0)
-        tune_delays(signal_chs=step.get('signal_chs') or LOOP_CHS,
-                    integration_time=step.get('integration_time'),
-                    auto_save=True)
+        _tune_delays_peaked(step.get('signal_chs') or LOOP_CHS,
+                            integration_time=step.get('integration_time'),
+                            auto_save=True)
     elif t == 'loss':
         calibrate_loss(run_stages=[step['stage']])
     elif t == 'measurement':
@@ -1848,13 +1868,7 @@ def main():
                 if SIM_MODE:
                     print("[SIM MODE] delay tuning needs hardware")
                 else:
-                    from libraries.countingcard import tune_delays
                     from libraries.settings import LOOP_CHS, DUMP_CH
-                    # U6 exits with non-negligible probability at every loop
-                    # pass, so tuning sees counts on all of LOOP_CHS at once
-                    # instead of needing a different preset per channel.
-                    _set_unitary('6')
-                    _set_input_state('6', 0)
                     chs = input(f"Channel(s) to tune, comma-separated "
                                 f"(Enter = all {LOOP_CHS}; include {DUMP_CH} to also tune the dump, "
                                 f"fixed regardless of process N): ").strip()
@@ -1863,10 +1877,7 @@ def main():
                               f"(Enter = per-channel default, ch{LOOP_CHS[0]} ~1.5s up to "
                               f"ch{LOOP_CHS[-1]} ~15s; or type a number to use it for every "
                               "channel): ").strip()
-                    tune_delays(
-                        signal_chs=signal_chs,
-                        integration_time=float(t) if t else None,
-                    )
+                    _tune_delays_peaked(signal_chs, integration_time=float(t) if t else None)
             case '3':
                 calibrate_background_and_loss()
             case '4':
