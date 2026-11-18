@@ -572,7 +572,7 @@ def _set_5050_optics():
 
 def _set_loop3_optics():
     """Peaks the exit probability at the 3rd loop pass (st.LOOP_CHS[2]) --
-    43.8% of the photon exits there, vs. 32.1%/14.3% leaking out at loop
+    43.75% of the photon exits there, vs. 32.1%/14.3% leaking out at loop
     passes 2/4 (the rest is residual beyond 6 loops). For use when tuning
     that channel's delay specifically: much stronger signal there than the
     fast falloff you'd get leaving the optics on a U_N process preset.
@@ -580,50 +580,115 @@ def _set_loop3_optics():
     Unlike _set_bypass_optics/_set_loop_optics (exact, closed-form 0- and
     1-loop solutions), this is the best configuration found by numerically
     optimizing h1/q1/h2/q2/hf2/qf2 and the input state over the per-pass
-    loop model (PBS -> coin -> fixed mirror phase -> PBS_dag -> OUT_2),
-    with the mirror phase pinned to the real hardware value (m1+m2+m3 =
-    3.16+3.77+3.74, same as every U_N preset) since it isn't a motorized
-    stage. Not yet confirmed on the bench. Also parks TOM_1/TOM_DUMP, as
-    every optics setter in this file does."""
+    loop model (PBS -> coin -> fixed mirror phase -> PBS_dag -> OUT_2,
+    getUnitary(path=1) so OUT_2/hf2,qf2 lands on the continuing beam --
+    confirmed against _set_bypass_optics/_set_loop_optics/_set_5050_optics
+    as three independent closed-form checks before trusting the optimizer
+    on this one), mirror phase pinned to the real hardware value (m1,m2,m3
+    = 3.16,3.77,3.74, same as every U_N preset) since it isn't a motorized
+    stage. (The angles previously here didn't actually reproduce this
+    docstring's own claimed numbers when re-simulated -- replaced.) Not yet
+    confirmed on the bench. Also parks TOM_1/TOM_DUMP, as every optics
+    setter in this file does."""
     _zero_analyzer_plates()
-    print("Setting HWP_IN/QWP_IN to 93.445°/85.188° (loop-3-peaking input state)")
-    tl.move_stage(HWP_IN, 93.445, COMPORT)
-    tl.move_stage(QWP_IN, 85.188, COMPORT)
+    print("Setting HWP_IN/QWP_IN to 139.487°/176.765° (loop-3-peaking input state)")
+    tl.move_stage(HWP_IN, 139.487, COMPORT)
+    tl.move_stage(QWP_IN, 176.765, COMPORT)
     print("Setting HWP_IN_2/QWP_IN_2 to 0°/0°")
     tl.move_stage(HWP_IN_2, 0, COMPORT)
     tl.move_stage(QWP_IN_2, 0, COMPORT)
-    print("Setting HWP_1/QWP_1 to 142.430°/166.820°, HWP_12/QWP_12 to 89.998°/179.998°")
-    tl.move_stage(HWP_1, 142.430, COMPORT)
-    tl.move_stage(QWP_1, 166.820, COMPORT)
-    tl.move_stage(HWP_12, 89.998, COMPORT)
-    tl.move_stage(QWP_12, 179.998, COMPORT)
-    print("Setting HWP_OUT_2/QWP_OUT_2 to 133.803°/33.989°")
-    tl.move_stage(HWP_OUT_2, 133.803, COMPORT)
-    tl.move_stage(QWP_OUT_2, 33.989, COMPORT)
+    print("Setting HWP_1/QWP_1 to 90.000°/90.000°, HWP_12/QWP_12 to 129.320°/62.933°")
+    tl.move_stage(HWP_1, 90.000, COMPORT)
+    tl.move_stage(QWP_1, 90.000, COMPORT)
+    tl.move_stage(HWP_12, 129.320, COMPORT)
+    tl.move_stage(QWP_12, 62.933, COMPORT)
+    print("Setting HWP_OUT_2/QWP_OUT_2 to 47.397°/127.347°")
+    tl.move_stage(HWP_OUT_2, 47.397, COMPORT)
+    tl.move_stage(QWP_OUT_2, 127.347, COMPORT)
 
 
 def _set_loop4_optics():
     """Peaks the exit probability at the 4th loop pass (st.LOOP_CHS[3]) --
-    30.1% of the photon exits there, vs. 28.9%/16.2% at loop passes 3/5
-    (close to loop 3's share, but still the highest of the six). Same
-    derivation and caveat as _set_loop3_optics -- optimizer-found, not an
-    exact solution, not yet confirmed on the bench. Also parks TOM_1/
-    TOM_DUMP, as every optics setter in this file does."""
+    30.08% of the photon exits there, vs. 28.9%/16.2% at loop passes 3/5
+    (close to loop 3's share, but still the highest of the six -- a thin
+    ~1.2-point margin over pass 3's leakage, thinner than every other loop
+    channel's config here, so expect more crosstalk tuning this one).
+    Same derivation and caveat as _set_loop3_optics -- optimizer-found, not
+    an exact solution, not yet confirmed on the bench. (Same replacement
+    note as _set_loop3_optics: the angles previously here didn't reproduce
+    this docstring's own claimed numbers.) Also parks TOM_1/TOM_DUMP, as
+    every optics setter in this file does."""
     _zero_analyzer_plates()
-    print("Setting HWP_IN/QWP_IN to 131.788°/99.785° (loop-4-peaking input state)")
-    tl.move_stage(HWP_IN, 131.788, COMPORT)
-    tl.move_stage(QWP_IN, 99.785, COMPORT)
+    print("Setting HWP_IN/QWP_IN to 131.546°/9.471° (loop-4-peaking input state)")
+    tl.move_stage(HWP_IN, 131.546, COMPORT)
+    tl.move_stage(QWP_IN, 9.471, COMPORT)
     print("Setting HWP_IN_2/QWP_IN_2 to 0°/0°")
     tl.move_stage(HWP_IN_2, 0, COMPORT)
     tl.move_stage(QWP_IN_2, 0, COMPORT)
-    print("Setting HWP_1/QWP_1 to 0.000°/90.002°, HWP_12/QWP_12 to 67.617°/6.486°")
-    tl.move_stage(HWP_1, 0.000, COMPORT)
-    tl.move_stage(QWP_1, 90.002, COMPORT)
-    tl.move_stage(HWP_12, 67.617, COMPORT)
-    tl.move_stage(QWP_12, 6.486, COMPORT)
-    print("Setting HWP_OUT_2/QWP_OUT_2 to 1.512°/117.523°")
-    tl.move_stage(HWP_OUT_2, 1.512, COMPORT)
-    tl.move_stage(QWP_OUT_2, 117.523, COMPORT)
+    print("Setting HWP_1/QWP_1 to 90.000°/90.000°, HWP_12/QWP_12 to 103.672°/148.759°")
+    tl.move_stage(HWP_1, 90.000, COMPORT)
+    tl.move_stage(QWP_1, 90.000, COMPORT)
+    tl.move_stage(HWP_12, 103.672, COMPORT)
+    tl.move_stage(QWP_12, 148.759, COMPORT)
+    print("Setting HWP_OUT_2/QWP_OUT_2 to 64.044°/62.087°")
+    tl.move_stage(HWP_OUT_2, 64.044, COMPORT)
+    tl.move_stage(QWP_OUT_2, 62.087, COMPORT)
+
+
+def _set_loop5_optics():
+    """Peaks the exit probability at the 5th loop pass (st.LOOP_CHS[4]) --
+    19.30% of the photon exits there, with a clean 4.66-point margin over
+    every other pass (next-highest is a 3-way tie at 14.6% across passes
+    1/4/6). Unlike loop3/loop4, straight peak-maximization here actually
+    landed on a config where a NEIGHBOURING pass came out higher than the
+    target pass itself -- useless for isolating this channel's delay -- so
+    this one instead maximizes the margin by which pass 5 beats every
+    other pass (min_{j!=5}(P(5)-P(j))), trading some raw peak height for
+    pass 5 actually being the brightest channel. Same model/derivation as
+    _set_loop3_optics; not yet confirmed on the bench. Also parks TOM_1/
+    TOM_DUMP, as every optics setter in this file does."""
+    _zero_analyzer_plates()
+    print("Setting HWP_IN/QWP_IN to 93.510°/129.214° (loop-5-peaking input state)")
+    tl.move_stage(HWP_IN, 93.510, COMPORT)
+    tl.move_stage(QWP_IN, 129.214, COMPORT)
+    print("Setting HWP_IN_2/QWP_IN_2 to 0°/0°")
+    tl.move_stage(HWP_IN_2, 0, COMPORT)
+    tl.move_stage(QWP_IN_2, 0, COMPORT)
+    print("Setting HWP_1/QWP_1 to 73.937°/92.330°, HWP_12/QWP_12 to 90.001°/90.002°")
+    tl.move_stage(HWP_1, 73.937, COMPORT)
+    tl.move_stage(QWP_1, 92.330, COMPORT)
+    tl.move_stage(HWP_12, 90.001, COMPORT)
+    tl.move_stage(QWP_12, 90.002, COMPORT)
+    print("Setting HWP_OUT_2/QWP_OUT_2 to 93.923°/115.389°")
+    tl.move_stage(HWP_OUT_2, 93.923, COMPORT)
+    tl.move_stage(QWP_OUT_2, 115.389, COMPORT)
+
+
+def _set_loop6_optics():
+    """Peaks the exit probability at the 6th (last) loop pass
+    (st.LOOP_CHS[5]) -- 12.96% of the photon exits there, with a 3.94-point
+    margin over every other pass (next-highest is a tie at 9.0% across
+    passes 1/5). Same margin-maximizing derivation as _set_loop5_optics
+    (plain peak-maximization put pass 5 above pass 6 in its own trace) --
+    the lowest achievable peak of the six, since by this point the photon
+    has had 5 earlier chances to have already left. Same model/derivation
+    as _set_loop3_optics; not yet confirmed on the bench. Also parks TOM_1/
+    TOM_DUMP, as every optics setter in this file does."""
+    _zero_analyzer_plates()
+    print("Setting HWP_IN/QWP_IN to 48.990°/121.052° (loop-6-peaking input state)")
+    tl.move_stage(HWP_IN, 48.990, COMPORT)
+    tl.move_stage(QWP_IN, 121.052, COMPORT)
+    print("Setting HWP_IN_2/QWP_IN_2 to 0°/0°")
+    tl.move_stage(HWP_IN_2, 0, COMPORT)
+    tl.move_stage(QWP_IN_2, 0, COMPORT)
+    print("Setting HWP_1/QWP_1 to 90.000°/90.000°, HWP_12/QWP_12 to 90.000°/66.526°")
+    tl.move_stage(HWP_1, 90.000, COMPORT)
+    tl.move_stage(QWP_1, 90.000, COMPORT)
+    tl.move_stage(HWP_12, 90.000, COMPORT)
+    tl.move_stage(QWP_12, 66.526, COMPORT)
+    print("Setting HWP_OUT_2/QWP_OUT_2 to 90.000°/103.077°")
+    tl.move_stage(HWP_OUT_2, 90.000, COMPORT)
+    tl.move_stage(QWP_OUT_2, 103.077, COMPORT)
 
 
 def _loss_stage_date(stages, key):
