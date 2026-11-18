@@ -692,8 +692,13 @@ def _set_loop6_optics():
 
 
 _LOOP_PEAK_OPTICS = {
-    4: _set_bypass_optics, 6: _set_loop_optics, 8: _set_loop3_optics,
-    10: _set_loop4_optics, 12: _set_loop5_optics, 14: _set_loop6_optics,
+    # ponytail: loop3/4/5/6 pulled pending a bench discrepancy (near-zero
+    # coincidences past pass 2, possibly a phase issue not captured by the
+    # idealized Jones-matrix model they were derived from) -- ch8/10/12/14
+    # fall through to _tune_delays_peaked's existing U6/s0 fallback below
+    # until that's sorted. _set_loop3_optics etc. are still defined, just
+    # not wired in here.
+    4: _set_bypass_optics, 6: _set_loop_optics,
 }
 
 

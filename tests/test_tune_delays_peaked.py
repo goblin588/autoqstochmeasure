@@ -1,9 +1,11 @@
-"""Regression check for _tune_delays_peaked's dispatch: each loop channel
-must get its own dedicated peak-optics preset (_set_bypass_optics/
-_set_loop_optics/_set_loop{3,4,5,6}_optics) before being tuned, and
-DUMP_CH (no dedicated preset) must fall back to U6/s0. Stubs out
-libraries.countingcard.tune_delays so this runs without the real counting
-card (needs pythonnet/TimeTag even to import)."""
+"""Regression check for _tune_delays_peaked's dispatch: ch4/ch6 get their
+dedicated, bench-trusted closed-form presets (_set_bypass_optics/
+_set_loop_optics) before being tuned; every other channel (ch8/10/12/14,
+and DUMP_CH) falls back to U6/s0. _set_loop{3,4,5,6}_optics are pulled
+from _LOOP_PEAK_OPTICS for now (see the dict's own comment) pending a
+bench discrepancy, so this only covers the channels still wired in.
+Stubs out libraries.countingcard.tune_delays so this runs without the
+real counting card (needs pythonnet/TimeTag even to import)."""
 import os
 import sys
 import types
@@ -29,7 +31,7 @@ _install_fake_countingcard()
 import measurement as m
 
 
-def test_each_loop_channel_gets_its_own_preset(monkeypatch):
+def test_ch4_and_ch6_get_their_dedicated_presets(monkeypatch):
     applied = []
     for ch, fn in list(m._LOOP_PEAK_OPTICS.items()):
         def wrapper(ch=ch, orig=fn):
@@ -38,10 +40,24 @@ def test_each_loop_channel_gets_its_own_preset(monkeypatch):
         monkeypatch.setitem(m._LOOP_PEAK_OPTICS, ch, wrapper)
 
     _calls.clear()
-    m._tune_delays_peaked([4, 6, 8, 10, 12, 14], integration_time=2.0, auto_save=True)
+    m._tune_delays_peaked([4, 6], integration_time=2.0, auto_save=True)
 
-    assert applied == [4, 6, 8, 10, 12, 14]
-    assert _calls == [((ch,), 2.0, True) for ch in (4, 6, 8, 10, 12, 14)]
+    assert applied == [4, 6]
+    assert _calls == [((ch,), 2.0, True) for ch in (4, 6)]
+
+
+def test_other_loop_channels_fall_back_to_u6_s0(monkeypatch):
+    # ch8/10/12/14 have no dedicated preset right now (see
+    # _LOOP_PEAK_OPTICS's own comment) -- same fallback as DUMP_CH below.
+    seeded = []
+    monkeypatch.setattr(m, '_set_unitary', lambda N: seeded.append(('unitary', N)))
+    monkeypatch.setattr(m, '_set_input_state', lambda N, j: seeded.append(('state', N, j)))
+
+    _calls.clear()
+    m._tune_delays_peaked([8, 10], integration_time=2.0, auto_save=True)
+
+    assert seeded == [('unitary', '6'), ('state', '6', 0)] * 2
+    assert _calls == [((8,), 2.0, True), ((10,), 2.0, True)]
 
 
 def test_only_last_channel_can_prompt_to_save(monkeypatch):
