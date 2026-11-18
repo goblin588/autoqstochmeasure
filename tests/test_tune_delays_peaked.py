@@ -1,11 +1,10 @@
 """Regression check for _tune_delays_peaked's dispatch: ch4/ch6 get their
 dedicated, bench-trusted closed-form presets (_set_bypass_optics/
-_set_loop_optics) before being tuned; every other channel (ch8/10/12/14,
-and DUMP_CH) falls back to U6/s0. _set_loop{3,4,5,6}_optics are pulled
-from _LOOP_PEAK_OPTICS for now (see the dict's own comment) pending a
-bench discrepancy, so this only covers the channels still wired in.
-Stubs out libraries.countingcard.tune_delays so this runs without the
-real counting card (needs pythonnet/TimeTag even to import)."""
+_set_loop_optics); ch8/10/12/14 get U3/U4/U5/U6 + s0 respectively (each
+channel's own process preset, via _set_u); DUMP_CH (no dedicated preset
+at all) falls back to U6/s0. Stubs out libraries.countingcard.tune_delays
+so this runs without the real counting card (needs pythonnet/TimeTag
+even to import)."""
 import os
 import sys
 import types
@@ -46,18 +45,19 @@ def test_ch4_and_ch6_get_their_dedicated_presets(monkeypatch):
     assert _calls == [((ch,), 2.0, True) for ch in (4, 6)]
 
 
-def test_other_loop_channels_fall_back_to_u6_s0(monkeypatch):
-    # ch8/10/12/14 have no dedicated preset right now (see
-    # _LOOP_PEAK_OPTICS's own comment) -- same fallback as DUMP_CH below.
+def test_ch8_10_12_14_get_their_own_process_preset(monkeypatch):
+    # each gets U_N/s0 for N = that channel's own pass number, not a
+    # shared U6 -- U_N concentrates meaningful probability at pass N.
     seeded = []
     monkeypatch.setattr(m, '_set_unitary', lambda N: seeded.append(('unitary', N)))
     monkeypatch.setattr(m, '_set_input_state', lambda N, j: seeded.append(('state', N, j)))
 
     _calls.clear()
-    m._tune_delays_peaked([8, 10], integration_time=2.0, auto_save=True)
+    m._tune_delays_peaked([8, 10, 12, 14], integration_time=2.0, auto_save=True)
 
-    assert seeded == [('unitary', '6'), ('state', '6', 0)] * 2
-    assert _calls == [((8,), 2.0, True), ((10,), 2.0, True)]
+    assert seeded == [('unitary', '3'), ('state', '3', 0), ('unitary', '4'), ('state', '4', 0),
+                       ('unitary', '5'), ('state', '5', 0), ('unitary', '6'), ('state', '6', 0)]
+    assert _calls == [((ch,), 2.0, True) for ch in (8, 10, 12, 14)]
 
 
 def test_only_last_channel_can_prompt_to_save(monkeypatch):

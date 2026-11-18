@@ -691,23 +691,33 @@ def _set_loop6_optics():
     tl.move_stage(QWP_OUT_2, 103.077, COMPORT)
 
 
+def _set_u(N):
+    """Zero-arg setter for _LOOP_PEAK_OPTICS: applies unitary N's fixed
+    waveplates + s0 input (same as menu option 1), for the loop channels
+    below that use a process preset instead of a closed-form config."""
+    def _setter():
+        _set_unitary(N)
+        _set_input_state(N, 0)
+    return _setter
+
+
 _LOOP_PEAK_OPTICS = {
-    # ponytail: loop3/4/5/6 pulled pending a bench discrepancy (near-zero
-    # coincidences past pass 2, possibly a phase issue not captured by the
-    # idealized Jones-matrix model they were derived from) -- ch8/10/12/14
-    # fall through to _tune_delays_peaked's existing U6/s0 fallback below
-    # until that's sorted. _set_loop3_optics etc. are still defined, just
-    # not wired in here.
+    # ch4/ch6: exact, closed-form, bench-trusted (100% at that pass).
+    # ch8/10/12/14: U_N/s0 for N = that channel's own pass number -- U_N
+    # is built to put meaningful probability at pass N specifically, so
+    # each channel gets its own preset rather than sharing one (U6, which
+    # spreads thin by pass 3+). Numerically-optimized loop3/4/5/6_optics
+    # existed here before but were pulled pending a bench discrepancy
+    # (near-zero coincidences past pass 2) -- still defined, just unused.
     4: _set_bypass_optics, 6: _set_loop_optics,
+    8: _set_u('3'), 10: _set_u('4'), 12: _set_u('5'), 14: _set_u('6'),
 }
 
 
 def _tune_delays_peaked(signal_chs, integration_time=None, auto_save=False):
     """Tune each channel in signal_chs one at a time, each under the
     optics setting that peaks exit probability at THAT channel's loop
-    pass (_set_bypass_optics/_set_loop_optics/_set_loop{3,4,5,6}_optics) --
-    far stronger, cleaner signal than the one-size-fits-all U6/s0 preset
-    used to give any single channel. Falls back to U6/s0 for any channel
+    pass -- see _LOOP_PEAK_OPTICS. Falls back to U6/s0 for any channel
     without a dedicated peak-optics setter (currently just DUMP_CH).
 
     tune_delays() asks to save after every call it's given -- calling it
