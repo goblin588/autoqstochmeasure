@@ -3,6 +3,7 @@
 Hardware settings
 """
 
+import datetime
 import json
 import os
 from pathlib import Path
@@ -174,3 +175,24 @@ ANTILATCH_HOST = '10.126.251.233'  # blue-box PC
 ANTILATCH_PORT = 65201
 ANTILATCH_DEVICE_IDS = [0]
 ANTILATCH_BIAS_VOLTAGES = [{0: 3.5, 1: 0.23, 2: 0, 3: 1.08}]
+
+# Time-of-day window where read_counts_integrated() won't fire antilatch pings
+# and run_queue() won't start a new step. Provisional/tunable -- two confirmed
+# overnight latch incidents (2026-11-17/18, 2026-11-18/19) both recovered
+# inside this window regardless of whether antilatch actually intervened,
+# suggesting recovery is time/environment-driven, not caused by the antilatch
+# reset itself. End moved 07:00 -> 07:30 after reviewing the new per-bin
+# timestamps from the 2026-11-18/19 incident: singles recovered near the
+# start of N4, but coincidence/output-channel counts kept struggling on and
+# off for a while after that (still too hot, still latching intermittently)
+# -- 07:00 cut it too close.
+BLACKOUT_START = datetime.time(5, 0)
+BLACKOUT_END = datetime.time(7, 30)
+
+
+def in_blackout_window(now=None):
+    """True from BLACKOUT_START up to (not including) BLACKOUT_END.
+    `now` is injectable for tests; defaults to datetime.datetime.now()."""
+    if now is None:
+        now = datetime.datetime.now()
+    return BLACKOUT_START <= now.time() < BLACKOUT_END

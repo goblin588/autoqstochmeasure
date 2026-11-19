@@ -127,7 +127,8 @@ def _set_tomo_stages(HWP, QWP, basis):
 
 
 def _sim_row(duration, chs=DET_CHS):
-    return {'herald': 0,
+    return {'timestamp': datetime.datetime.now().isoformat(),
+            'herald': 0,
             **{f'singles_ch{ch}': 0 for ch in chs},
             **{f'coinc_ch{ch}': 0 for ch in chs},
             'int_time': duration}
@@ -204,12 +205,28 @@ def _fit_loop_decay(counts, loop_chs=None):
     return ratio, ratio_err
 
 
+def _print_decay_bins(counts, loop_chs, loss_per_pass, stage_label):
+    """Per-bin raw coincidence counts for each fitted channel of a 5050/
+    split30-style decay stage, next to the same counts with the measured
+    per-pass loss divided back out (leaving just the stage's intended
+    split) -- eyeball check for whether the loss is actually uniform
+    pass-to-pass."""
+    bins = counts.get('bins') or ()
+    print(f"{stage_label} bin counts (raw -> loss-corrected):")
+    for k, ch in enumerate(loop_chs, start=1):
+        raw = [b.get(f'coinc_ch{ch}', 0) for b in bins]
+        corrected = [round(c / loss_per_pass ** (k - 1), 1) for c in raw]
+        print(f"  ch{ch} (pass {k}): raw={raw}")
+        print(f"            corrected={corrected}")
+
+
 # Descriptive labels for calibrate_loss's 3 stage keys, used wherever a
 # stage summary is shown to a human or embedded in a measurement's JSON.
 LOSS_STAGE_LABELS = {
-    'loop0': 'zero_loop_output',
-    'loop1': 'one_loop',
-    '5050':  'fifty_fifty_all_channels',
+    'loop0':   'zero_loop_output',
+    'loop1':   'one_loop',
+    '5050':    'fifty_fifty_all_channels',
+    'split30': 'thirty_seventy_all_channels',
 }
 
 
@@ -481,12 +498,16 @@ def _zero_path2_plates():
     HWP_OUT_2) at 0 — the known-idle state for any loss-calibration stage
     that doesn't deliberately route light through them, so a plate left
     somewhere else by an earlier stage (e.g. IN_2 at V from a loop-pass
-    stage) can't bleed into this one."""
+    stage) can't bleed into this one. Returns the confirmed angles read
+    back after moving, so a caller can log/verify the parks actually
+    landed rather than assuming the commanded move succeeded."""
     print("Parking path-2 plates (HWP_IN_2/QWP_IN_2/QWP_OUT_2/HWP_OUT_2) at 0°")
-    tl.move_stage(HWP_IN_2, 0, COMPORT)
-    tl.move_stage(QWP_IN_2, 0, COMPORT)
-    tl.move_stage(QWP_OUT_2, 0, COMPORT)
-    tl.move_stage(HWP_OUT_2, 0, COMPORT)
+    return {
+        'HWP_IN_2':  tl.move_stage(HWP_IN_2, 0, COMPORT),
+        'QWP_IN_2':  tl.move_stage(QWP_IN_2, 0, COMPORT),
+        'QWP_OUT_2': tl.move_stage(QWP_OUT_2, 0, COMPORT),
+        'HWP_OUT_2': tl.move_stage(HWP_OUT_2, 0, COMPORT),
+    }
 
 
 def _zero_analyzer_plates():
@@ -495,11 +516,14 @@ def _zero_analyzer_plates():
     at 0 -- a lossless rotation can't itself change total intensity, but a
     leftover angle from an earlier tomography run has no business being set
     during a loop-exit-probability measurement, so every optics setter
-    below parks it explicitly rather than leaving it to chance."""
-    tl.move_stage(HWP_TOM_1, 0, COMPORT)
-    tl.move_stage(QWP_TOM_1, 0, COMPORT)
-    tl.move_stage(HWP_TOM_DUMP, 0, COMPORT)
-    tl.move_stage(QWP_TOM_DUMP, 0, COMPORT)
+    below parks it explicitly rather than leaving it to chance. Returns the
+    confirmed angles read back after moving."""
+    return {
+        'HWP_TOM_1':    tl.move_stage(HWP_TOM_1, 0, COMPORT),
+        'QWP_TOM_1':    tl.move_stage(QWP_TOM_1, 0, COMPORT),
+        'HWP_TOM_DUMP': tl.move_stage(HWP_TOM_DUMP, 0, COMPORT),
+        'QWP_TOM_DUMP': tl.move_stage(QWP_TOM_DUMP, 0, COMPORT),
+    }
 
 
 def _set_bypass_optics():
@@ -512,15 +536,17 @@ def _set_bypass_optics():
     sending only half out the exit -- see tests/test_loop_exit_split.py).
     Fully automated — no manual switch/plate step needed. Sets everything
     this stage depends on -- self-contained so it's safe to run even if an
-    earlier stage was skipped via resume."""
-    _set_input_basis('H')
-    _zero_path2_plates()
-    _zero_analyzer_plates()
+    earlier stage was skipped via resume. Returns the confirmed angles read
+    back for every plate this stage touches."""
+    angles = _set_input_basis('H')
+    angles.update(_zero_path2_plates())
+    angles.update(_zero_analyzer_plates())
     print("Setting HWP_1/QWP_1 to 0°, HWP_12/QWP_12 to 45°/0° (zero-loop, all exit)")
-    tl.move_stage(QWP_1, 0, COMPORT)
-    tl.move_stage(HWP_1, 0, COMPORT)
-    tl.move_stage(QWP_12, 0, COMPORT)
-    tl.move_stage(HWP_12, 45, COMPORT)
+    angles['QWP_1'] = tl.move_stage(QWP_1, 0, COMPORT)
+    angles['HWP_1'] = tl.move_stage(HWP_1, 0, COMPORT)
+    angles['QWP_12'] = tl.move_stage(QWP_12, 0, COMPORT)
+    angles['HWP_12'] = tl.move_stage(HWP_12, 45, COMPORT)
+    return angles
 
 
 def _set_loop_optics():
@@ -529,20 +555,23 @@ def _set_loop_optics():
     at 45°/0° flips H->V so it goes around the loop; it crosses IN_2 again
     (still 0, pass-through), then HWP_1/QWP_1 at 45°/0° routes it out the
     exit port. Fully automated — no manual switch needed. Self-contained,
-    same reasoning as _set_bypass_optics (also parks TOM_1/TOM_DUMP)."""
-    _set_input_basis('H')
-    _zero_analyzer_plates()
+    same reasoning as _set_bypass_optics (also parks TOM_1/TOM_DUMP).
+    Returns the confirmed angles read back for every plate this stage
+    touches."""
+    angles = _set_input_basis('H')
+    angles.update(_zero_analyzer_plates())
     print("Setting HWP_IN_2/QWP_IN_2 and HWP_12/QWP_12 to 0 (pass-through / loop arm idle)")
-    tl.move_stage(QWP_IN_2, 0, COMPORT)
-    tl.move_stage(HWP_IN_2, 0, COMPORT)
-    tl.move_stage(QWP_12, 0, COMPORT)
-    tl.move_stage(HWP_12, 0, COMPORT)
+    angles['QWP_IN_2'] = tl.move_stage(QWP_IN_2, 0, COMPORT)
+    angles['HWP_IN_2'] = tl.move_stage(HWP_IN_2, 0, COMPORT)
+    angles['QWP_12'] = tl.move_stage(QWP_12, 0, COMPORT)
+    angles['HWP_12'] = tl.move_stage(HWP_12, 0, COMPORT)
     print("Setting HWP_OUT_2/QWP_OUT_2 to 45°/0° (H->V, sends it around the loop)")
-    tl.move_stage(QWP_OUT_2, 0, COMPORT)
-    tl.move_stage(HWP_OUT_2, 45, COMPORT)
+    angles['QWP_OUT_2'] = tl.move_stage(QWP_OUT_2, 0, COMPORT)
+    angles['HWP_OUT_2'] = tl.move_stage(HWP_OUT_2, 45, COMPORT)
     print("Setting HWP_1/QWP_1 to 45°/0° (routes it back out the exit port)")
-    tl.move_stage(QWP_1, 0, COMPORT)
-    tl.move_stage(HWP_1, 45, COMPORT)
+    angles['QWP_1'] = tl.move_stage(QWP_1, 0, COMPORT)
+    angles['HWP_1'] = tl.move_stage(HWP_1, 45, COMPORT)
+    return angles
 
 
 def _set_5050_optics():
@@ -559,15 +588,44 @@ def _set_5050_optics():
     at 45°/0°) would silently break the assumed-stationary 50/50 split
     every pass after the first -- _zero_path2_plates() parks both IN_2 and
     OUT_2, not just IN_2, to rule that out. Self-contained, same pattern
-    as the other two optics setters (also parks TOM_1/TOM_DUMP)."""
-    _set_input_basis('H')
-    _zero_path2_plates()
-    _zero_analyzer_plates()
+    as the other two optics setters (also parks TOM_1/TOM_DUMP). Returns
+    the confirmed angles read back for every plate this stage touches."""
+    angles = _set_input_basis('H')
+    angles.update(_zero_path2_plates())
+    angles.update(_zero_analyzer_plates())
     print("Setting HWP_1/QWP_1 to 0°, HWP_12 to 22.5° (50/50 exit/loop split)")
-    tl.move_stage(QWP_1, 0, COMPORT)
-    tl.move_stage(HWP_1, 0, COMPORT)
-    tl.move_stage(QWP_12, 0, COMPORT)
-    tl.move_stage(HWP_12, 22.5, COMPORT)
+    angles['QWP_1'] = tl.move_stage(QWP_1, 0, COMPORT)
+    angles['HWP_1'] = tl.move_stage(HWP_1, 0, COMPORT)
+    angles['QWP_12'] = tl.move_stage(QWP_12, 0, COMPORT)
+    angles['HWP_12'] = tl.move_stage(HWP_12, 22.5, COMPORT)
+    return angles
+
+
+def _set_split30_optics():
+    """30%-exit/70%-loop split: same config as _set_5050_optics (input H,
+    path-2 plates and H1/Q1 parked at 0), but HWP_12 at 16.605° instead of
+    22.5°. For this config, exit_fraction(alpha) = sin^2(2*alpha) -- solving
+    for 0.30 gives alpha = 0.5*asin(sqrt(0.3)) ~= 16.605°, confirmed via
+    getUnitary() (matches the known 0deg->0%, 22.5deg->50%, 45deg->100%
+    points on the same curve). The loop-arm (path2) output is pure H at
+    this angle too, same as at 22.5deg -- not a special property of 22.5,
+    confirmed by sweeping getUnitary() across HWP_12.
+
+    Retaining 70%/pass instead of 50%/pass keeps loop pass 6 at ~11.8% of
+    pass 1 (vs. 50/50's ~1.6%) -- clear of the detector noise floor that
+    forces the 5050 fit to be truncated to 4 channels, see _fit_loop_decay
+    callers in calibrate_loss. Self-contained, same pattern as
+    _set_5050_optics. Returns the confirmed angles read back for every
+    plate this stage touches."""
+    angles = _set_input_basis('H')
+    angles.update(_zero_path2_plates())
+    angles.update(_zero_analyzer_plates())
+    print("Setting HWP_1/QWP_1 to 0°, HWP_12 to 16.605° (30/70 exit/loop split)")
+    angles['QWP_1'] = tl.move_stage(QWP_1, 0, COMPORT)
+    angles['HWP_1'] = tl.move_stage(HWP_1, 0, COMPORT)
+    angles['QWP_12'] = tl.move_stage(QWP_12, 0, COMPORT)
+    angles['HWP_12'] = tl.move_stage(HWP_12, 16.605, COMPORT)
+    return angles
 
 
 def _set_loop3_optics():
@@ -759,10 +817,11 @@ def _loss_stage_done(stages, key):
 
 
 def calibrate_loss(run_stages=None):
-    """Menu-driven loss calibration over 2 stages, both fully automated (no
+    """Menu-driven loss calibration over 3 stages, all fully automated (no
     fiber replugging — safe to run unattended/queued):
-      loop01 zero-loop bypass + one loop pass, together -> loop0, loop1
-      5050   50/50 split optics, one recording across every loop channel
+      loop01   zero-loop bypass + one loop pass, together -> loop0, loop1
+      5050     50/50 split optics, one recording across every loop channel
+      split30  30/70 split optics, one recording across every loop channel
 
     (Previously also had source/source_dump/dump/straight_to_dump/input
     stages for det_eff_dump/loss_input_to_setup/loss_to_dump — dropped along
@@ -775,19 +834,26 @@ def calibrate_loss(run_stages=None):
     (relative errors combine in quadrature). Every losses/rates key has an
     "_err" companion.
 
-    Returns/reports loss_per_loop_pass by two independent methods, so they
+    Returns/reports loss_per_loop_pass by three independent methods, so they
     can be checked against each other:
       loss_per_loop_pass      = loop1/loop0 — loop0/loop1's optics each put
                            ~all the light deterministically at one channel,
                            so the ratio between the two stages is the
                            per-pass loss directly.
       loss_per_loop_pass_5050 = the 50/50 stage's channel-to-channel count
-                           decay (fit across all 6 channels at once, see
-                           _fit_loop_decay), divided by the known 0.5
-                           lossless-case ratio. Same physical quantity, a
-                           completely different optics config and
-                           measurement — if the two disagree by more than
-                           their error bars, something's off.
+                           decay (fit across the first 4 channels only --
+                           the 0.5x/pass decay falls into the detector
+                           noise floor by pass 5-6, see _fit_loop_decay),
+                           divided by the known 0.5 lossless-case ratio.
+                           Same physical quantity, a completely different
+                           optics config and measurement — if these
+                           disagree by more than their error bars,
+                           something's off.
+      loss_per_loop_pass_split30 = same idea, but the 30/70 stage's
+                           shallower 0.7x/pass decay stays clear of the
+                           noise floor out to pass 6, so this one fits
+                           across all 6 channels -- a third cross-check,
+                           see _set_split30_optics.
 
     Stages are picked from a menu, in any order, any number of times — not a
     fixed sequence. Each menu entry shows when it was last done. Saves after
@@ -834,12 +900,12 @@ def calibrate_loss(run_stages=None):
         return meta
 
     def _run_loop0():
-        _set_bypass_optics()
-        return {'ch': st.LOOP_CHS[0], 'counts': _record_all_channels()}
+        angles = _set_bypass_optics()
+        return {'ch': st.LOOP_CHS[0], 'counts': _record_all_channels(), 'angles': angles}
 
     def _run_loop1():
-        _set_loop_optics()
-        return {'ch': st.LOOP_CHS[1], 'counts': _record_all_channels()}
+        angles = _set_loop_optics()
+        return {'ch': st.LOOP_CHS[1], 'counts': _record_all_channels(), 'angles': angles}
 
     def _run_loop01():
         """loop0 (zero-loop) and loop1 (one loop pass) always run together
@@ -853,16 +919,26 @@ def calibrate_loss(run_stages=None):
         the loss-per-pass estimate comes from fitting how fast counts decay
         channel-to-channel (see _fit_loop_decay), not from any single
         channel in isolation."""
-        _set_5050_optics()
-        return {'5050': {'counts': _record_all_channels()}}
+        angles = _set_5050_optics()
+        return {'5050': {'counts': _record_all_channels(), 'angles': angles}}
+
+    def _run_split30():
+        """30/70 optics, same idea as _run_5050 but a shallower split --
+        retaining more light per pass keeps pass 6 clear of the detector
+        noise floor that forces the 5050 fit to be truncated to 4 channels
+        (see _set_split30_optics)."""
+        angles = _set_split30_optics()
+        return {'split30': {'counts': _record_all_channels(), 'angles': angles}}
 
     stage_menu = [
         ('loop01', 'Zero-loop + one-loop pass, together', _run_loop01),
         ('5050', '50/50 split, all channels (independent cross-check)', _run_5050),
+        ('split30', '30/70 split, all 6 channels (shallower decay, independent cross-check)', _run_split30),
     ]
-    # '5050' computes its own independent loss figure (see below) rather
-    # than feeding the loop0/loop1 formula, so it's not required before
-    # "compute & finish" -- loop0/loop1 alone are enough to get a number.
+    # '5050'/'split30' each compute their own independent loss figure (see
+    # below) rather than feeding the loop0/loop1 formula, so neither is
+    # required before "compute & finish" -- loop0/loop1 alone are enough to
+    # get a number.
     required_stages = ['loop0', 'loop1']
     runners = {key: run for key, _, run in stage_menu}
 
@@ -939,15 +1015,31 @@ def calibrate_loss(run_stages=None):
     # Method 2: under the 50/50 optics, every pass splits whatever's left
     # exactly 50/50 (by construction, see _set_5050_optics) -- so with zero
     # loss, consecutive loop channels' counts would decay by exactly 0.5x.
-    # Fitting the *actual* decay across all 6 channels at once and dividing
-    # out that known 0.5x isolates the real per-pass loss -- an independent
-    # cross-check against method 1 (same physical quantity, different
-    # optics config and a different measurement entirely).
+    # Fitting the *actual* decay and dividing out that known 0.5x isolates
+    # the real per-pass loss -- an independent cross-check against method 1
+    # (same physical quantity, different optics config and a different
+    # measurement entirely). Only the first 4 channels go into the fit --
+    # loss balloons past that point, dragging the fit to look worse than
+    # the per-pass loss actually is.
     if '5050' in stages:
-        decay_ratio, decay_ratio_err = _fit_loop_decay(stages['5050']['counts'])
+        decay_ratio, decay_ratio_err = _fit_loop_decay(stages['5050']['counts'], loop_chs=st.LOOP_CHS[:4])
         if decay_ratio is not None:
             losses['loss_per_loop_pass_5050'] = decay_ratio / 0.5
             losses['loss_per_loop_pass_5050_err'] = decay_ratio_err / 0.5
+            _print_decay_bins(stages['5050']['counts'], st.LOOP_CHS[:4], losses['loss_per_loop_pass_5050'], '5050')
+
+    # Method 3: same idea as method 2, but under a shallower 30/70 optics
+    # split (see _set_split30_optics) that retains 70% per pass instead of
+    # 50% -- keeps pass 6 well clear of the noise floor that forces
+    # method 2's fit to be truncated to 4 channels, so this one fits across
+    # all 6 channels. A third independent cross-check on the same physical
+    # quantity as methods 1 and 2.
+    if 'split30' in stages:
+        decay_ratio, decay_ratio_err = _fit_loop_decay(stages['split30']['counts'], loop_chs=st.LOOP_CHS)
+        if decay_ratio is not None:
+            losses['loss_per_loop_pass_split30'] = decay_ratio / 0.7
+            losses['loss_per_loop_pass_split30_err'] = decay_ratio_err / 0.7
+            _print_decay_bins(stages['split30']['counts'], st.LOOP_CHS, losses['loss_per_loop_pass_split30'], 'split30')
 
     meta = _save(losses=losses, rates=rates)
     print(f"\nSaved -> {path}")
@@ -1782,7 +1874,18 @@ def run_queue(queue):
     ok = failed = 0
     try:
         for i, step in enumerate(queue, 1):
+            waited_s = 0.0
+            if st.in_blackout_window():
+                print(f"\nBlackout window ({st.BLACKOUT_START:%H:%M}-"
+                      f"{st.BLACKOUT_END:%H:%M}) active -- pausing queue "
+                      f"before step {i}/{len(queue)}...")
+            while st.in_blackout_window():
+                time.sleep(60)
+                waited_s += 60
+
             entry = {'index': i, 'step': step, 'started_at': datetime.datetime.now().isoformat()}
+            if waited_s:
+                entry['blackout_wait_s'] = waited_s
             print(f"\n=== Step {i}/{len(queue)}: {_describe_queue_step(step)} ===")
             t0 = time.monotonic()
             try:

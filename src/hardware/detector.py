@@ -7,7 +7,8 @@ import os
 
 from libraries.settings import (ANTILATCH_HOST, ANTILATCH_PORT,
                                 ANTILATCH_DEVICE_IDS, ANTILATCH_BIAS_VOLTAGES,
-                                LOOP_CHS, DUMP_CH)
+                                LOOP_CHS, DUMP_CH, BLACKOUT_START,
+                                BLACKOUT_END, in_blackout_window)
 
 import numpy as np
 
@@ -257,14 +258,22 @@ class Logic16:
 
             antilatch_flags, antilatch_reasons = self.antilatch_check(s_counts, pos_singles)
             if antilatch_flags > 0:
-                # Ping in the background so the readout cadence never stalls on the
-                # server (up to 10 s if unreachable). At most one ping in flight;
-                # if the last one is still running, this window's ping is skipped.
-                if self._antilatch_thread is None or not self._antilatch_thread.is_alive():
-                    self._antilatch_thread = threading.Thread(target=self.antilatch_func, daemon=True)
-                    self._antilatch_thread.start()
-                print(f"\nLatching detected -- zero counts on: {', '.join(antilatch_reasons)}",
-                      flush=True)
+                reasons_str = ', '.join(antilatch_reasons)
+                if in_blackout_window():
+                    # Known-bad window: both confirmed overnight recoveries happened
+                    # here regardless of whether antilatch fired, so pinging the
+                    # server has no evidenced benefit here -- skip it, keep retrying.
+                    print(f"\nLatching detected -- zero counts on: {reasons_str} "
+                          f"(antilatch suppressed: {BLACKOUT_START:%H:%M}-"
+                          f"{BLACKOUT_END:%H:%M} blackout window)", flush=True)
+                else:
+                    # Ping in the background so the readout cadence never stalls on the
+                    # server (up to 10 s if unreachable). At most one ping in flight;
+                    # if the last one is still running, this window's ping is skipped.
+                    if self._antilatch_thread is None or not self._antilatch_thread.is_alive():
+                        self._antilatch_thread = threading.Thread(target=self.antilatch_func, daemon=True)
+                        self._antilatch_thread.start()
+                    print(f"\nLatching detected -- zero counts on: {reasons_str}", flush=True)
                 has_latched += antilatch_flags
                 if has_latched > 5:
                     print('\nWARNING: several latching events in a row - is the cryostat warm?')

@@ -1,6 +1,7 @@
 """Regression check for read_counts_integrated's latch handling: a latched
 bin (some channel's singles == 0) must be discarded and retried, not
 accumulated into the returned totals or int_time."""
+import datetime
 import itertools
 import sys
 import types
@@ -15,7 +16,9 @@ sys.modules.setdefault('System', types.SimpleNamespace(Int32=int))
 sys.modules.setdefault('TimeTag', types.SimpleNamespace(TTInterface=object, Logic=object))
 sys.modules.setdefault('libraries.settings', types.SimpleNamespace(
     ANTILATCH_HOST='x', ANTILATCH_PORT=1, ANTILATCH_DEVICE_IDS=[0], ANTILATCH_BIAS_VOLTAGES=[{}],
-    LOOP_CHS=[4, 6, 8, 10, 12, 14], DUMP_CH=7))
+    LOOP_CHS=[4, 6, 8, 10, 12, 14], DUMP_CH=7,
+    BLACKOUT_START=datetime.time(5, 0), BLACKOUT_END=datetime.time(7, 30),
+    in_blackout_window=lambda now=None: False))
 
 import hardware.detector as det
 

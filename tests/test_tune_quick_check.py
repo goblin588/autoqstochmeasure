@@ -1,6 +1,7 @@
 """Regression check for tune_delays' quick pre-scan: a clear peak within
 +/-5 steps of the old delay should skip the full zoom; a drifted/no-peak
 channel should still fall back to it."""
+import datetime
 import sys
 import types
 
@@ -16,11 +17,21 @@ _settings_stub = types.SimpleNamespace(
     DELAYS=[0.0] * 16, THRESHOLDS=0.4, BACKGROUND_OFFSET_NS=15.0,
     TUNE_INTEGRATION_S={}, CHANNELS={2: {'delay': 0.0}},
     delays_for=lambda: [0.0] * 16, save_calibration=lambda *a, **kw: None,
+    BLACKOUT_START=datetime.time(5, 0), BLACKOUT_END=datetime.time(7, 30),
+    in_blackout_window=lambda now=None: False,
 )
 # Direct assignment, not setdefault: test_scan_resweep.py registers the same
 # module name with a stub missing CHANNELS/save_calibration, and whichever
 # test file's import runs first would otherwise win for both.
 sys.modules['libraries.settings'] = _settings_stub
+# `import libraries.settings as X` (used inside tune_delays()/scan_and_record())
+# resolves through the `libraries` package's own `.settings` attribute, not
+# through this sys.modules dict entry directly -- once the real settings.py
+# has genuinely loaded once elsewhere in the test session (e.g. via
+# measurement.py), that attribute stays pointed at it regardless of what gets
+# patched into sys.modules here, so it has to be kept in sync by hand.
+if 'libraries' in sys.modules:
+    sys.modules['libraries'].settings = _settings_stub
 
 import libraries.countingcard as cc
 import hardware.detector as det
