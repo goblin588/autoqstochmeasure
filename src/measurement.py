@@ -778,6 +778,12 @@ def _tune_delays_peaked(signal_chs, integration_time=None, auto_save=False):
     pass -- see _LOOP_PEAK_OPTICS. Falls back to U6/s0 for any channel
     without a dedicated peak-optics setter (currently just DUMP_CH).
 
+    Every peak-optics setter parks TOM_1 at H (via _zero_analyzer_plates).
+    If there's an output polarizer downstream of TOM_1, H blocks the signal
+    outright; set to V instead, after the setter, every time -- harmless
+    if there's no such polarizer (a free rotation can't change total
+    intensity), necessary if there is one.
+
     tune_delays() asks to save after every call it's given -- calling it
     once per channel here would ask once per channel. Every channel but
     the last auto-saves instead (so progress survives a Ctrl-C/crash
@@ -794,6 +800,9 @@ def _tune_delays_peaked(signal_chs, integration_time=None, auto_save=False):
             print(f"--- ch{ch}: no dedicated peak-optics preset, falling back to U6/s0 ---")
             _set_unitary('6')
             _set_input_state('6', 0)
+        print("Setting HWP_TOM_1/QWP_TOM_1 to 45°/0° (V) -- H would block everything if there's an output polarizer downstream of TOM_1")
+        tl.move_stage(HWP_TOM_1, 45, COMPORT)
+        tl.move_stage(QWP_TOM_1, 0, COMPORT)
         is_last = i == len(signal_chs) - 1
         tune_delays(signal_chs=[ch], integration_time=integration_time,
                     auto_save=auto_save if is_last else True)
