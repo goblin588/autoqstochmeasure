@@ -18,6 +18,8 @@ import datetime
 import time
 from pathlib import Path
 
+import numpy as np
+
 # Output uses →, —, ° etc. When stdout isn't a console (piped to tee/a log,
 # run from a scheduler) Windows falls back to cp1252 and print() raises
 # UnicodeEncodeError mid-measurement. Force UTF-8 and never die on a glyph.
@@ -772,17 +774,88 @@ _LOOP_PEAK_OPTICS = {
 }
 
 
+_TOM_1_CLOSED_FORM_STATE = {4: 'V', 6: 'H'}
+# _set_bypass_optics/_set_loop_optics are engineered for exact 100% exit
+# efficiency (see tests/test_loop_exit_split.py) -- that's why each lands on
+# a single pure polarization every time, confirmed via the same Jones-matrix
+# model _tom1_p1_state_live uses below (see tests/test_tom1_safe_state.py).
+# Hardcoded here rather than computed live because these two setters' angles
+# are fixed in the code itself, not independently-tunable calibration data
+# the way unitaries_angles/process_state_angles are.
+
+
+def _tom1_p1_state_live(N, n_passes):
+    """Simulate n_passes of the ring unitary with U_N's fixed waveplate
+    angles and s0_N as input -- the same configuration _set_u(N) actually
+    leaves on the bench for every pass, since it's one set of stationary
+    waveplates the photon re-crosses each time around the loop, not a
+    per-pass setting. Returns the raw (H_p1, V_p1) amplitude arriving at
+    the TOM_1 reference plane on the final pass, before TOM_1's own plates
+    do anything.
+
+    Reuses plotting.getUnitary (the same Jones-matrix model
+    tests/test_loop_exit_split.py already trusts for exit/loop splits),
+    called with path=1 so hf2/qf2 (OUT_2) genuinely rotates the continuing
+    p2 amplitude between passes, rather than being appended as an end
+    analyzer only on the last one."""
+    a = unitaries_angles[N]
+    state = plotting.input_state_vector(f's0_{N}')
+    for i in range(n_passes):
+        last = i == n_passes - 1
+        U = plotting.getUnitary(hin2=a['hin2'], qin2=a['qin2'], h1=a['h1'], q1=a['q1'],
+                                 h2=a['h2'], q2=a['q2'],
+                                 hf2=0 if last else a['hf2'], qf2=0 if last else a['qf2'],
+                                 path=1, m1=a['m1'], m2=a['m2'], m3=a['m3'])
+        out = np.asarray(U @ state, dtype=complex).reshape(4, 1)
+        if last:
+            return complex(out[0, 0]), complex(out[1, 0])
+        state = np.zeros((4, 1), dtype=complex)
+        state[2, 0], state[3, 0] = out[2, 0], out[3, 0]
+
+
+def _tom1_safe_state(ch):
+    """Which named state (H or V) actually arrives at TOM_1 for `ch`'s
+    current peak-optics preset -- so _tune_delays_peaked's post-setter
+    override can rotate THAT state onto H (the real downstream PBS's pass
+    axis) instead of guessing one fixed angle for every channel. (Commit
+    df483c0 guessed V and silently blocked ch6; the fix after it guessed H
+    instead and silently blocked ch4/8/10/12/14 -- neither guess checked
+    what polarization the preset actually delivers.)
+
+    ch4/ch6: see _TOM_1_CLOSED_FORM_STATE. ch8/10/12/14 (no dedicated
+    preset, DUMP_CH's U6/s0 fallback): computed live via
+    _tom1_p1_state_live, for however many loop passes that channel
+    represents (LOOP_CHS.index(ch)+1) -- DUMP_CH isn't actually read
+    through TOM_1 (OUT_2 is its analyzer, see _tomo_path2), so its state
+    doesn't matter, but N=6/6 passes (matching ch14's own U6/s0 preset) is
+    as good a default as any."""
+    if ch in _TOM_1_CLOSED_FORM_STATE:
+        return _TOM_1_CLOSED_FORM_STATE[ch]
+    n_passes = LOOP_CHS.index(ch) + 1 if ch in LOOP_CHS else 6
+    N = str(n_passes)
+    h_amp, v_amp = _tom1_p1_state_live(N, n_passes)
+    p_h, p_v = abs(h_amp) ** 2, abs(v_amp) ** 2
+    blocked_frac = min(p_h, p_v) / (p_h + p_v) if (p_h + p_v) > 0 else 0.0
+    if blocked_frac > 0.01:
+        print(f"WARNING: ch{ch}'s arriving state at TOM_1 isn't close to pure H or V "
+              f"(blocked fraction {blocked_frac*100:.1f}%) -- U_{N}/process_state_angles "
+              f"may have changed; this override will still lose some signal")
+    return 'H' if p_h >= p_v else 'V'
+
+
 def _tune_delays_peaked(signal_chs, integration_time=None, auto_save=False):
     """Tune each channel in signal_chs one at a time, each under the
     optics setting that peaks exit probability at THAT channel's loop
     pass -- see _LOOP_PEAK_OPTICS. Falls back to U6/s0 for any channel
     without a dedicated peak-optics setter (currently just DUMP_CH).
 
-    Every peak-optics setter parks TOM_1 at H (via _zero_analyzer_plates).
-    If there's an output polarizer downstream of TOM_1, H blocks the signal
-    outright; set to V instead, after the setter, every time -- harmless
-    if there's no such polarizer (a free rotation can't change total
-    intensity), necessary if there is one.
+    The real optic downstream of TOM_1 is a PBS that passes H and reflects
+    V away from the detector. Every peak-optics setter leaves TOM_1 at some
+    fixed angle of its own (H via _zero_analyzer_plates, or a U_N
+    tomography angle that's neither H nor V) -- so after the setter, TOM_1
+    is explicitly rotated onto whichever state (_tom1_safe_state) that
+    channel's own preset actually delivers there, every time, to guarantee
+    the signal actually reaches the detector during tuning.
 
     tune_delays() asks to save after every call it's given -- calling it
     once per channel here would ask once per channel. Every channel but
@@ -800,9 +873,12 @@ def _tune_delays_peaked(signal_chs, integration_time=None, auto_save=False):
             print(f"--- ch{ch}: no dedicated peak-optics preset, falling back to U6/s0 ---")
             _set_unitary('6')
             _set_input_state('6', 0)
-        print("Setting HWP_TOM_1/QWP_TOM_1 to 45°/0° (V) -- H would block everything if there's an output polarizer downstream of TOM_1")
-        tl.move_stage(HWP_TOM_1, 45, COMPORT)
-        tl.move_stage(QWP_TOM_1, 0, COMPORT)
+        state = _tom1_safe_state(ch)
+        hwp, qwp = basis_angles[state]
+        print(f"Setting HWP_TOM_1/QWP_TOM_1 to {hwp}°/{qwp}° ({state}) -- the real PBS "
+              f"downstream of TOM_1 passes H, and this channel's own preset delivers {state} there")
+        tl.move_stage(HWP_TOM_1, hwp, COMPORT)
+        tl.move_stage(QWP_TOM_1, qwp, COMPORT)
         is_last = i == len(signal_chs) - 1
         tune_delays(signal_chs=[ch], integration_time=integration_time,
                     auto_save=auto_save if is_last else True)
@@ -897,6 +973,7 @@ def calibrate_loss(run_stages=None):
             'stages': stages,
             'record_n_bins': 20,
             'record_bin_s': 5.0,
+            'delays_ns': {ch: d for ch, d in enumerate(delays_for(), start=1) if ch in st.CHANNELS},
             'git_commit': _git_commit(),
             'saved_at': datetime.datetime.now().isoformat(),
         }
