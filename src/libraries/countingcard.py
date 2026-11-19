@@ -1,3 +1,5 @@
+import datetime
+
 from hardware.detector import Logic16
 from libraries.settings import (TRIGG_CH, DET_CHS, DUMP_CH, LOOP_CHS, COINCIDENCE_WINDOW,
                                  DELAYS, THRESHOLDS, BACKGROUND_OFFSET_NS)
@@ -51,7 +53,9 @@ def acquire_counts_binned(
     per bin and a Ctrl-C keeps whatever bins were already collected.
 
     Returns row: acquire_counts()'s dict shape (totals summed across bins)
-    plus row['bins'], a list of n_bins per-bin dicts of that same shape.
+    plus row['bins'], a list of n_bins per-bin dicts of that same shape, each
+    also carrying 'timestamp' (ISO, recorded right after that bin's read
+    completes) so individual bins can be correlated to wall-clock time later.
     """
     with Logic16(coincidence_window=coincidence_window, logic_mode=True,
                  integration_window=bin_s) as logic:
@@ -63,7 +67,7 @@ def acquire_counts_binned(
                     pos_singles=[herald_ch, *signal_chs],
                     pos_coincidence=[[herald_ch, ch] for ch in signal_chs],
                 )
-                bin_row = {'herald': int(s_counts[0])}
+                bin_row = {'timestamp': datetime.datetime.now().isoformat(), 'herald': int(s_counts[0])}
                 for j, ch in enumerate(signal_chs):
                     bin_row[f'singles_ch{ch}'] = int(s_counts[j + 1])
                     bin_row[f'coinc_ch{ch}'] = int(c_counts[j])
@@ -539,7 +543,8 @@ def scan_and_record(
     Returns (best_delay, row) — row's top-level 'herald'/'singles_ch{ch}'/
     'coinc_ch{ch}'/'int_time' are the sum across bins (same shape as
     acquire_counts()), plus row['bins']: a list of n_bins per-bin dicts,
-    each {'herald', 'singles_ch{ch}', 'coinc_ch{ch}', 'int_time'}.
+    each {'timestamp', 'herald', 'singles_ch{ch}', 'coinc_ch{ch}', 'int_time'}
+    ('timestamp' is ISO, recorded right after that bin's read completes).
     """
     import libraries.settings as st
     offsets = (np.arange(absolute_range[0], absolute_range[1] + step / 2, step)
@@ -584,7 +589,8 @@ def scan_and_record(
             for i in range(n_bins):
                 c, s, t = logic.read_counts_integrated(
                     pos_singles=[herald_ch, ch], pos_coincidence=[[herald_ch, ch]])
-                bins.append({'herald': int(s[0]), f'singles_ch{ch}': int(s[1]),
+                bins.append({'timestamp': datetime.datetime.now().isoformat(),
+                             'herald': int(s[0]), f'singles_ch{ch}': int(s[1]),
                              f'coinc_ch{ch}': int(c[0]), 'int_time': t})
                 rate = c[0] / t if t > 0 else 0.0
                 print(f"    [{i + 1}/{n_bins}] +{t:.1f}s: {c[0]:.0f} coinc ({rate:6.1f} Hz) — "
@@ -645,7 +651,8 @@ def measure_background(
             for i in range(n_bins):
                 c, s, t = logic.read_counts_integrated(
                     pos_singles=[herald_ch, ch], pos_coincidence=[[herald_ch, ch]])
-                bins.append({'herald': int(s[0]), 'ch_singles': int(s[1]),
+                bins.append({'timestamp': datetime.datetime.now().isoformat(),
+                             'herald': int(s[0]), 'ch_singles': int(s[1]),
                              'coinc': int(c[0]), 'int_time': t})
                 print(f"    [{i + 1}/{n_bins}] background +{t:.1f}s: {c[0]:.0f} coinc — "
                       f"{sum(b['coinc'] for b in bins):.0f} coinc so far")

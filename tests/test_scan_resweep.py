@@ -2,6 +2,7 @@
 best delay found sits within 2 steps of either edge of the swept window,
 the true peak may be outside it, so the scan should recentre there and
 sweep again instead of silently returning an edge point."""
+import datetime
 import sys
 import types
 
@@ -19,6 +20,8 @@ _settings_stub = types.SimpleNamespace(
     TRIGG_CH=1, DET_CHS=[2], DUMP_CH=7, LOOP_CHS=[2, 4], COINCIDENCE_WINDOW=1.0,
     DELAYS=[0.0] * 16, THRESHOLDS=0.4, BACKGROUND_OFFSET_NS=15.0,
     delays_for=lambda: [0.0] * 16,
+    BLACKOUT_START=datetime.time(5, 0), BLACKOUT_END=datetime.time(7, 30),
+    in_blackout_window=lambda now=None: False,
 )
 sys.modules.setdefault('libraries.settings', _settings_stub)
 
@@ -60,7 +63,7 @@ def test_resweeps_until_peak_outside_initial_window_is_found(monkeypatch):
     fake = _FakeLogic16(peak_delay=25.0, ch=2)
     monkeypatch.setattr(cc, 'Logic16', lambda **kwargs: fake)
     best_delay, row = cc.scan_and_record(
-        ch=2, absolute_range=(0.0, 20.0), step=1.0, herald_ch=1, record_duration=1.0)
+        ch=2, absolute_range=(0.0, 20.0), step=1.0, herald_ch=1, record_bin_s=1.0, n_bins=1)
     assert best_delay == 25.0, "should have recentred outward to find the true peak at 25ns"
     assert fake.n_reads > 21, "should have swept more than once to get there"
 
@@ -69,6 +72,6 @@ def test_no_resweep_when_peak_already_has_margin(monkeypatch):
     fake = _FakeLogic16(peak_delay=10.0, ch=2)
     monkeypatch.setattr(cc, 'Logic16', lambda **kwargs: fake)
     best_delay, row = cc.scan_and_record(
-        ch=2, absolute_range=(0.0, 20.0), step=1.0, herald_ch=1, record_duration=1.0)
+        ch=2, absolute_range=(0.0, 20.0), step=1.0, herald_ch=1, record_bin_s=1.0, n_bins=1)
     assert best_delay == 10.0
     assert fake.n_reads == 22, "one sweep (21 pts) + one final recording read, no resweep"
