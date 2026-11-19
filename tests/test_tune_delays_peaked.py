@@ -75,6 +75,22 @@ def test_only_last_channel_can_prompt_to_save(monkeypatch):
     assert _calls == [((4,), 2.0, True), ((6,), 2.0, True), ((8,), 2.0, False)]
 
 
+def test_tom_1_forced_to_each_channels_own_safe_state(monkeypatch):
+    # The real optic downstream of TOM_1 is a PBS that passes H -- but
+    # which of H/V actually arrives at TOM_1 differs per channel (see
+    # _tom1_safe_state / tests/test_tom1_safe_state.py for the physics).
+    # A single fixed override is wrong for at least one channel either way
+    # (commit df483c0 forced V, blocking ch6; forcing H instead blocks
+    # ch4/8/10/12/14) -- so the override must track each channel's own
+    # computed safe state, not one constant.
+    for ch, expected in [(4, 'V'), (6, 'H'), (8, 'V'), (10, 'V'), (12, 'V'), (14, 'V')]:
+        moves = []
+        monkeypatch.setattr(m.tl, 'move_stage', lambda stage, angle, port: moves.append(angle))
+        _calls.clear()
+        m._tune_delays_peaked([ch], integration_time=2.0, auto_save=True)
+        assert moves[-2:] == m.basis_angles[expected], f"ch{ch} expected {expected}"
+
+
 def test_dump_channel_falls_back_to_u6_s0(monkeypatch):
     seeded = []
     monkeypatch.setattr(m, '_set_unitary', lambda N: seeded.append(('unitary', N)))
