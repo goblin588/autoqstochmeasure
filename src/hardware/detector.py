@@ -5,10 +5,14 @@ import threading
 import time
 import os
 
+import datetime
+
 from libraries.settings import (ANTILATCH_HOST, ANTILATCH_PORT,
                                 ANTILATCH_DEVICE_IDS, ANTILATCH_BIAS_VOLTAGES,
                                 LOOP_CHS, DUMP_CH, BLACKOUT_START,
-                                BLACKOUT_END, in_blackout_window)
+                                BLACKOUT_END, in_blackout_window,
+                                CYCLING_RECOVERY_TIME, CYCLING_LATCH_PERSIST_S,
+                                in_cycling_check_window)
 
 import numpy as np
 
@@ -238,12 +242,16 @@ class Logic16:
         loops again without advancing counting_time, so the returned totals
         and int_time reflect only genuinely counted time. The buffer is NOT
         cleared here, so counts accumulated since the previous read (e.g.
-        the gap between rows) are also included.
+        the gap between rows) are also included. A latch persisting for
+        CYCLING_LATCH_PERSIST_S inside the 3-6am cycling-check window is
+        assumed to be overnight detector cycling and pauses this whole
+        read (not just a retry) until CYCLING_RECOVERY_TIME.
         """
         counting_time = 0
         total_c_counts = np.zeros(len(pos_coincidence))
         total_s_counts = np.zeros(len(pos_singles))
         has_latched = 0
+        latch_streak_start = None
 
         # The card counts in hardware during the sleep, so this sleep IS the
         # integration period, not overhead. Timed by the PC clock: the card's
@@ -259,6 +267,21 @@ class Logic16:
             antilatch_flags, antilatch_reasons = self.antilatch_check(s_counts, pos_singles)
             if antilatch_flags > 0:
                 reasons_str = ', '.join(antilatch_reasons)
+                if latch_streak_start is None:
+                    latch_streak_start = time.monotonic()
+                streak_s = time.monotonic() - latch_streak_start
+                if in_cycling_check_window() and streak_s >= CYCLING_LATCH_PERSIST_S:
+                    print(f"\nLatching detected -- zero counts on: {reasons_str} "
+                          f"-- persisted {streak_s:.0f}s in the 3-6am cycling-check "
+                          f"window, assuming detector cycling and pausing measurement "
+                          f"until {CYCLING_RECOVERY_TIME:%H:%M}...", flush=True)
+                    while datetime.datetime.now().time() < CYCLING_RECOVERY_TIME:
+                        time.sleep(60)
+                    print(f"\nResuming after cycling pause ({CYCLING_RECOVERY_TIME:%H:%M}).",
+                          flush=True)
+                    latch_streak_start = None
+                    has_latched = 0
+                    continue
                 if in_blackout_window():
                     # Known-bad window: both confirmed overnight recoveries happened
                     # here regardless of whether antilatch fired, so pinging the
@@ -284,4 +307,5 @@ class Logic16:
             total_s_counts += s_counts
             counting_time += time.monotonic() - t0
             has_latched = 0
+            latch_streak_start = None
         return total_c_counts, total_s_counts, counting_time
