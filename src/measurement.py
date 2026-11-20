@@ -403,6 +403,41 @@ def _record_all_channels(n_bins=20, bin_s=5.0):
                                   delays=delays_for())
 
 
+def _sum_rows(rows):
+    """Elementwise sum of count-row dicts sharing _record_all_channels()'s
+    shape -- herald/singles_ch*/coinc_ch*/int_time added straight across
+    every row, 'bins' summed index-by-index (not concatenated) so the
+    result still has exactly n_bins entries and _bin_rate_mean_std/
+    _fit_loop_decay keep working unmodified on it."""
+    keys = [k for k in rows[0] if k not in ('bins', 'timestamp')]
+    total = {k: sum(r[k] for r in rows) for k in keys}
+    if 'timestamp' in rows[0]:
+        total['timestamp'] = rows[-1]['timestamp']
+    total['bins'] = [
+        {**{k: sum(b[k] for b in bin_group) for k in bin_group[0] if k not in ('timestamp', 'int_time')},
+         'int_time': sum(b['int_time'] for b in bin_group),
+         'timestamp': bin_group[-1]['timestamp']}
+        for bin_group in zip(*(r['bins'] for r in rows))
+    ]
+    return total
+
+
+def _record_all_channels_over_bases(n_bins=20, bin_s=5.0):
+    """Same recording as _record_all_channels(), summed across every basis
+    in tl.FULL_BASES -- for setups with an output PBS downstream of the
+    exit-path analyzer (TOM_1), which passes only one polarization
+    component per channel, so a single fixed analyzer angle picks off a
+    fraction of the real count rather than the total. Sweeping TOM_1
+    through a complete basis set and summing recovers the total flux the
+    PBS would otherwise clip. TOM_DUMP is left parked at 0 -- only the exit
+    path sits behind the output PBS."""
+    rows = []
+    for basis in tl.FULL_BASES:
+        _set_tomo_stages(HWP_TOM_1, QWP_TOM_1, basis)
+        rows.append(_record_all_channels(n_bins=n_bins, bin_s=bin_s))
+    return _sum_rows(rows)
+
+
 def _acquire_background(N):
     """Quick background/accidental-coincidence check for N's channels, run
     automatically at the start of measurement() — every channel's delay
@@ -901,7 +936,7 @@ def _loss_stage_done(stages, key):
     return _loss_stage_date(stages, key) != 'never'
 
 
-def calibrate_loss(run_stages=None):
+def calibrate_loss(run_stages=None, has_pbs=None):
     """Menu-driven loss calibration over 3 stages, all fully automated (no
     fiber replugging — safe to run unattended/queued):
       loop01   zero-loop bypass + one loop pass, together -> loop0, loop1
@@ -954,7 +989,18 @@ def calibrate_loss(run_stages=None):
     through to "compute & finish" afterward, so calling this once per stage
     across separate queue steps resumes/accumulates via the loss-calibration
     file exactly like the interactive menu does.
+
+    has_pbs: whether an output PBS sits downstream of the exit-path analyzer
+    (TOM_1) -- a PBS passes only one polarization component per channel, so
+    every stage's recording sweeps TOM_1 through every basis and sums the
+    counts (_record_all_channels_over_bases) instead of taking one fixed-
+    angle reading, recovering the total flux the PBS would otherwise clip.
+    None (the default) asks interactively, same phrasing as autotomo's
+    has_pbs prompt; pass True/False to skip the prompt for unattended/queued
+    use.
     """
+    if has_pbs is None:
+        has_pbs = input("Output PBS installed? [y/N]: ").strip().lower() == 'y'
     found_path, existing = _find_latest_loss_calibration()
     stages = dict(existing.get('stages', {}))
     if stages:
@@ -971,6 +1017,7 @@ def calibrate_loss(run_stages=None):
             path = Path(f"{st.DATA_DIR}/{datetime.datetime.now():%Y%m%d_%H%M%S}_loss_calibration.json")
         meta = {
             'stages': stages,
+            'has_pbs': has_pbs,
             'record_n_bins': 20,
             'record_bin_s': 5.0,
             'delays_ns': {ch: d for ch, d in enumerate(delays_for(), start=1) if ch in st.CHANNELS},
@@ -985,13 +1032,16 @@ def calibrate_loss(run_stages=None):
         print(f"  (saved -> {path.name})")
         return meta
 
+    def _record():
+        return _record_all_channels_over_bases() if has_pbs else _record_all_channels()
+
     def _run_loop0():
         angles = _set_bypass_optics()
-        return {'ch': st.LOOP_CHS[0], 'counts': _record_all_channels(), 'angles': angles}
+        return {'ch': st.LOOP_CHS[0], 'counts': _record(), 'angles': angles}
 
     def _run_loop1():
         angles = _set_loop_optics()
-        return {'ch': st.LOOP_CHS[1], 'counts': _record_all_channels(), 'angles': angles}
+        return {'ch': st.LOOP_CHS[1], 'counts': _record(), 'angles': angles}
 
     def _run_loop01():
         """loop0 (zero-loop) and loop1 (one loop pass) always run together
@@ -1006,7 +1056,7 @@ def calibrate_loss(run_stages=None):
         channel-to-channel (see _fit_loop_decay), not from any single
         channel in isolation."""
         angles = _set_5050_optics()
-        return {'5050': {'counts': _record_all_channels(), 'angles': angles}}
+        return {'5050': {'counts': _record(), 'angles': angles}}
 
     def _run_split30():
         """30/70 optics, same idea as _run_5050 but a shallower split --
@@ -1014,7 +1064,7 @@ def calibrate_loss(run_stages=None):
         noise floor that forces the 5050 fit to be truncated to 4 channels
         (see _set_split30_optics)."""
         angles = _set_split30_optics()
-        return {'split30': {'counts': _record_all_channels(), 'angles': angles}}
+        return {'split30': {'counts': _record(), 'angles': angles}}
 
     stage_menu = [
         ('loop01', 'Zero-loop + one-loop pass, together', _run_loop01),
@@ -1717,7 +1767,8 @@ def _describe_queue_step(step):
     if t == 'tune':
         return f"Tune delays: channels={step['signal_chs']}, integration_time={step['integration_time']}"
     if t == 'loss':
-        return f"Loss measurement: stage={step['stage']}"
+        pbs = ", PBS" if step.get('has_pbs') else ""
+        return f"Loss measurement: stage={step['stage']}{pbs}"
     if t == 'measurement':
         return (f"Measurement: N={step['N']}, js={step['js']}, "
                 f"tomo={step['tomo']}, duration_s={step['duration_s']}")
@@ -1747,7 +1798,13 @@ def _ask_loss_step():
     except (ValueError, IndexError):
         print("Invalid choice")
         return None
-    return {'type': 'loss', 'stage': key}
+    # Defaulted to False (no PBS) rather than prompted -- current hardware
+    # doesn't have one, and this is carried in the step so _run_queue_step
+    # can pass it straight through at dispatch time instead of
+    # calibrate_loss() re-prompting and blocking on input() if this step
+    # runs unattended, hours later. Flip to a real prompt (or True) once a
+    # PBS is actually installed downstream of TOM_1.
+    return {'type': 'loss', 'stage': key, 'has_pbs': False}
 
 
 def _ask_queue_measurement_step():
@@ -1873,7 +1930,7 @@ def _step_signature(step):
     if t == 'tune':
         return f"tune:{sorted(step.get('signal_chs') or [])}:{step.get('integration_time')}"
     if t == 'loss':
-        return f"loss:{step['stage']}"
+        return f"loss:{step['stage']}:pbs={step.get('has_pbs', False)}"
     return t
 
 
@@ -1935,7 +1992,7 @@ def _run_queue_step(step):
                             integration_time=step.get('integration_time'),
                             auto_save=True)
     elif t == 'loss':
-        calibrate_loss(run_stages=[step['stage']])
+        calibrate_loss(run_stages=[step['stage']], has_pbs=step.get('has_pbs', False))
     elif t == 'measurement':
         js = step['js']
         if js == 'all':
