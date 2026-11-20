@@ -196,3 +196,29 @@ def in_blackout_window(now=None):
     if now is None:
         now = datetime.datetime.now()
     return BLACKOUT_START <= now.time() < BLACKOUT_END
+
+
+# Separate, wider window for detecting a mid-measurement "detector cycling"
+# event (as opposed to BLACKOUT_*, which only suppresses antilatch pings and
+# is checked between run_queue() steps, not mid-step). A latch that starts
+# in this window and won't clear on its own -- as opposed to the normal
+# one-retry latch/recover cycle -- is assumed to be the same overnight
+# phenomenon behind the 2026-11-17/18 and 2026-11-18/19 incidents, so instead
+# of continuing to retry/ping, read_counts_integrated() pauses entirely and
+# waits out CYCLING_RECOVERY_TIME. Wider on both ends than BLACKOUT_* since
+# pausing a whole measurement is a bigger hammer than skipping a ping: no
+# incident data yet on how early it can start or how long recovery actually
+# takes under this new logic, so all three values here are provisional --
+# revisit once this has actually caught a real incident.
+CYCLING_CHECK_START = datetime.time(3, 0)
+CYCLING_CHECK_END = datetime.time(6, 0)
+CYCLING_RECOVERY_TIME = datetime.time(8, 30)
+CYCLING_LATCH_PERSIST_S = 600  # how long a latch must persist before it's treated as cycling, not a normal blip
+
+
+def in_cycling_check_window(now=None):
+    """True from CYCLING_CHECK_START up to (not including) CYCLING_CHECK_END.
+    `now` is injectable for tests; defaults to datetime.datetime.now()."""
+    if now is None:
+        now = datetime.datetime.now()
+    return CYCLING_CHECK_START <= now.time() < CYCLING_CHECK_END

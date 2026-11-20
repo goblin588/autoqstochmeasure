@@ -18,7 +18,9 @@ sys.modules.setdefault('libraries.settings', types.SimpleNamespace(
     ANTILATCH_HOST='x', ANTILATCH_PORT=1, ANTILATCH_DEVICE_IDS=[0], ANTILATCH_BIAS_VOLTAGES=[{}],
     LOOP_CHS=[4, 6, 8, 10, 12, 14], DUMP_CH=7,
     BLACKOUT_START=datetime.time(5, 0), BLACKOUT_END=datetime.time(7, 30),
-    in_blackout_window=lambda now=None: False))
+    in_blackout_window=lambda now=None: False,
+    CYCLING_RECOVERY_TIME=datetime.time(8, 30), CYCLING_LATCH_PERSIST_S=600,
+    in_cycling_check_window=lambda now=None: False))
 
 import hardware.detector as det
 
@@ -99,6 +101,40 @@ def test_all_loop_channels_dark_is_a_latch(monkeypatch):
     assert t == 1.0, "int_time should reflect only the recovered bin"
 
 
+def test_persistent_latch_in_cycling_window_pauses_until_recovery(monkeypatch):
+    """A latch that won't clear, inside the 3-6am cycling-check window, must
+    pause the whole read (no antilatch ping) until CYCLING_RECOVERY_TIME,
+    then resume and finish normally -- this is the 16-hour-measurement case:
+    pausing in place rather than just suppressing a ping."""
+    monkeypatch.setattr(det, 'in_cycling_check_window', lambda now=None: True)
+    monkeypatch.setattr(det, 'CYCLING_LATCH_PERSIST_S', 0)  # trigger on the first latch
+    clock_times = iter([datetime.time(4, 0), datetime.time(9, 0)])
+    monkeypatch.setattr(det.datetime, 'datetime',
+                         types.SimpleNamespace(now=lambda: types.SimpleNamespace(
+                             time=lambda: next(clock_times))))
+    reads = [
+        (np.array([0]), np.array([0, 5])),   # latched -- triggers cycling pause
+        (np.array([3]), np.array([9, 5])),   # recovers after the pause
+    ]
+    c, s, t = _run(reads, monkeypatch)
+    assert list(c) == [3]
+    assert t == 1.0, "only the post-recovery bin should count"
+
+
+def test_persistent_latch_outside_cycling_window_does_not_pause(monkeypatch):
+    """Same persistent latch, but outside 3-6am -- must use the normal
+    retry/ping path, not the cycling pause."""
+    monkeypatch.setattr(det, 'in_cycling_check_window', lambda now=None: False)
+    monkeypatch.setattr(det, 'CYCLING_LATCH_PERSIST_S', 0)
+    reads = [
+        (np.array([0]), np.array([0, 5])),   # latched
+        (np.array([3]), np.array([9, 5])),   # recovers on normal retry
+    ]
+    c, s, t = _run(reads, monkeypatch)
+    assert list(c) == [3]
+    assert t == 1.0
+
+
 def test_dump_dark_alone_is_not_a_latch(monkeypatch):
     """Dump is a standalone channel excluded from the check entirely --
     none of the automated loop/exit optics configs route light there, so
@@ -124,5 +160,7 @@ if __name__ == "__main__":
     test_no_latch_counts_normally(mp)
     test_one_loop_channel_lit_is_not_a_latch(mp)
     test_all_loop_channels_dark_is_a_latch(mp)
+    test_persistent_latch_in_cycling_window_pauses_until_recovery(mp)
+    test_persistent_latch_outside_cycling_window_does_not_pause(mp)
     test_dump_dark_alone_is_not_a_latch(mp)
     print("ok")
