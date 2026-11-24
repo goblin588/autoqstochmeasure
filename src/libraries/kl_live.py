@@ -71,6 +71,13 @@ def kl_rate_from_counts(N: int, counts: dict, int_time: float, bg_row: dict,
     e.g. right at startup before calibrate_loss has run) -- same "can't
     loss-correct" case stochprocsim's loss_rates_for callers already handle.
     """
+    # N flows in from unitaries_angles' string keys ('3'/'4'/...) at every
+    # call site in measurement.py -- cast once here rather than trust every
+    # caller, since the array built below silently goes to dtype=object
+    # (mixing N in as a string alongside loop_pass_k's ints) if N isn't an
+    # int, and T ** k on that raises "ufunc 'power' not supported" instead
+    # of a clear type error.
+    N = int(N)
     rates_hz = (loss_cal or {}).get('coincidence_rates_hz', {})
     c2, c4 = rates_hz.get('loop0_hz', 0.0), rates_hz.get('loop1_hz', 0.0)
     if not c2:

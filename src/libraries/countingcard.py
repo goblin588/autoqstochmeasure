@@ -2,7 +2,7 @@ import datetime
 
 from hardware.detector import Logic16
 from libraries.settings import (TRIGG_CH, DET_CHS, DUMP_CH, LOOP_CHS, COINCIDENCE_WINDOW,
-                                 DELAYS, THRESHOLDS, BACKGROUND_OFFSET_NS)
+                                 THRESHOLDS, BACKGROUND_OFFSET_NS, delays_for)
 import numpy as np
 
 def acquire_counts(
@@ -10,7 +10,7 @@ def acquire_counts(
     herald_ch: int = TRIGG_CH,
     signal_chs: list = DET_CHS,
     coincidence_window: float = COINCIDENCE_WINDOW,
-    delays: list = DELAYS,
+    delays: list | None = None,
 ):
     """
     Integrates counts for `duration` seconds and returns totals as a dict:
@@ -20,7 +20,12 @@ def acquire_counts(
     and redone rather than counted, so int_time is real counted time (may
     run slightly over duration, but never includes latched dead time) —
     divide counts by it for rates.
+
+    delays=None (default) looks up the live-calibrated delays from
+    settings.delays_for() at call time, not whatever they were when this
+    module was first imported.
     """
+    delays = delays if delays is not None else delays_for()
     with Logic16(coincidence_window=coincidence_window, logic_mode=True,
                  integration_window=duration) as logic:
         logic.configure(threshold=THRESHOLDS, coincidence_window=coincidence_window, delays=delays)
@@ -43,7 +48,7 @@ def acquire_counts_binned(
     herald_ch: int = TRIGG_CH,
     signal_chs: list = DET_CHS,
     coincidence_window: float = COINCIDENCE_WINDOW,
-    delays: list = DELAYS,
+    delays: list | None = None,
 ):
     """Same shape as acquire_counts, but `n_bins` reads of `bin_s` seconds
     each (default 20 x 5s = 100s total) instead of one long blocking read —
@@ -56,7 +61,11 @@ def acquire_counts_binned(
     plus row['bins'], a list of n_bins per-bin dicts of that same shape, each
     also carrying 'timestamp' (ISO, recorded right after that bin's read
     completes) so individual bins can be correlated to wall-clock time later.
+
+    delays=None (default) looks up the live-calibrated delays from
+    settings.delays_for() at call time, see acquire_counts.
     """
+    delays = delays if delays is not None else delays_for()
     with Logic16(coincidence_window=coincidence_window, logic_mode=True,
                  integration_window=bin_s) as logic:
         logic.configure(threshold=THRESHOLDS, coincidence_window=coincidence_window, delays=delays)
@@ -94,12 +103,16 @@ def acquire_rows(
     herald_ch: int = TRIGG_CH,
     signal_chs: list = DET_CHS,
     coincidence_window: float = COINCIDENCE_WINDOW,
-    delays: list = DELAYS,
+    delays: list | None = None,
 ):
     """Yield one totals-row per `integration` s (same schema as acquire_counts),
     keeping the card open between rows. total=None streams until the caller
     stops iterating (e.g. Ctrl-C); otherwise stops once `total` s are counted.
+
+    delays=None (default) looks up the live-calibrated delays from
+    settings.delays_for() at call time, see acquire_counts.
     """
+    delays = delays if delays is not None else delays_for()
     with Logic16(coincidence_window=coincidence_window, logic_mode=True,
                  integration_window=integration) as logic:
         logic.configure(threshold=THRESHOLDS, coincidence_window=coincidence_window, delays=delays)
@@ -123,7 +136,7 @@ def stream_herald_and_signal(
     signal_ch: int = DET_CHS[0],
     duration: float | None = None,
     coincidence_window: float = COINCIDENCE_WINDOW,
-    delays: list = DELAYS,
+    delays: list | None = None,
 ):
     """
     Streams the herald/signal coincidence count, averaged over 1 s windows.
@@ -133,8 +146,11 @@ def stream_herald_and_signal(
         signal_ch: Signal detector channel number.
         duration: How long to stream for, in seconds. None = until Ctrl-C.
         coincidence_window: Coincidence window in ns.
-        delays: List of per-channel delays (index = channel - 1).
+        delays: List of per-channel delays (index = channel - 1). None
+            (default) looks up the live-calibrated delays from
+            settings.delays_for() at call time, see acquire_counts.
     """
+    delays = delays if delays is not None else delays_for()
     singles_chs = [herald_ch, signal_ch]
     coincidence_chs = [[herald_ch, signal_ch]]
 
@@ -162,7 +178,7 @@ def stream_channels_with_delays(
     herald_ch: int = TRIGG_CH,
     signal_chs: list = DET_CHS,
     coincidence_window: float = COINCIDENCE_WINDOW,
-    delays: list = DELAYS,
+    delays: list | None = None,
     integration_window: float = 0.5,
 ):
     """
@@ -174,9 +190,12 @@ def stream_channels_with_delays(
         herald_ch: Herald/trigger channel number.
         signal_chs: List of signal detector channel numbers.
         coincidence_window: Coincidence window in ns.
-        delays: List of per-channel delays (index = channel - 1).
+        delays: List of per-channel delays (index = channel - 1). None
+            (default) looks up the live-calibrated delays from
+            settings.delays_for() at call time, see acquire_counts.
         integration_window: Integration time in seconds per measurement.
     """
+    delays = delays if delays is not None else delays_for()
     singles_chs = [herald_ch, *signal_chs]
     coincidence_chs = [[herald_ch, ch] for ch in signal_chs]
 
@@ -755,7 +774,7 @@ def find_delay_window(
                 )
 
             for delay_ns in delay_points:
-                base_delays = list(DELAYS)
+                base_delays = list(delays_for())
                 base_delays[signal_ch - 1] = float(delay_ns)
                 logic.set_delays(base_delays)
 
