@@ -74,7 +74,7 @@ CHANNELS = {
     10: {'delay': 1656, 'threshold': THRESH_CH},  # loop 4
     12: {'delay': 1223, 'threshold': THRESH_CH},  # loop 5
     14: {'delay': 800,  'threshold': THRESH_CH},  # loop 6
-    7:  {'delay': 790,  'threshold': 0.2},  # dump — parked at dump-after-6 (DUMP_DELAYS[6])
+    7:  {'delay': 790,  'threshold': 0.1},  # dump — parked at dump-after-6 (DUMP_DELAYS[6])
 }
 # "Dump After" column of the calibration table — dump channel delay if the
 # photon is dumped having completed k loops (0 = herald row, straight to
