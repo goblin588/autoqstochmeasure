@@ -19,7 +19,8 @@ sys.modules.setdefault('libraries.settings', types.SimpleNamespace(
     LOOP_CHS=[4, 6, 8, 10, 12, 14], DUMP_CH=7,
     BLACKOUT_START=datetime.time(5, 0), BLACKOUT_END=datetime.time(7, 30),
     in_blackout_window=lambda now=None: False,
-    CYCLING_RECOVERY_TIME=datetime.time(8, 30), CYCLING_LATCH_PERSIST_S=600,
+    CYCLING_RECOVERY_TIME=datetime.time(9, 30), CYCLING_LATCH_PERSIST_S=600,
+    CYCLING_MIN_COOLDOWN_S=3600,
     in_cycling_check_window=lambda now=None: False))
 
 import hardware.detector as det
@@ -101,17 +102,32 @@ def test_all_loop_channels_dark_is_a_latch(monkeypatch):
     assert t == 1.0, "int_time should reflect only the recovered bin"
 
 
+def _fake_clock(real_times):
+    """real_times: list of real datetime.datetime instances to return from
+    successive datetime.datetime.now() calls, then repeat the last one
+    forever (the wait loop polls now() many times in a row)."""
+    times = list(real_times)
+
+    def now():
+        if len(times) > 1:
+            return times.pop(0)
+        return times[0]
+    return types.SimpleNamespace(now=now)
+
+
 def test_persistent_latch_in_cycling_window_pauses_until_recovery(monkeypatch):
-    """A latch that won't clear, inside the 3-6am cycling-check window, must
-    pause the whole read (no antilatch ping) until CYCLING_RECOVERY_TIME,
-    then resume and finish normally -- this is the 16-hour-measurement case:
-    pausing in place rather than just suppressing a ping."""
+    """A latch that won't clear, inside the cycling-check window, must
+    pause the whole read (no antilatch ping) until at least
+    CYCLING_RECOVERY_TIME, then resume and finish normally -- this is the
+    16-hour-measurement case: pausing in place rather than just
+    suppressing a ping."""
     monkeypatch.setattr(det, 'in_cycling_check_window', lambda now=None: True)
     monkeypatch.setattr(det, 'CYCLING_LATCH_PERSIST_S', 0)  # trigger on the first latch
-    clock_times = iter([datetime.time(4, 0), datetime.time(9, 0)])
-    monkeypatch.setattr(det.datetime, 'datetime',
-                         types.SimpleNamespace(now=lambda: types.SimpleNamespace(
-                             time=lambda: next(clock_times))))
+    monkeypatch.setattr(det.datetime, 'datetime', _fake_clock([
+        datetime.datetime(2026, 1, 1, 4, 0),   # latch detected
+        datetime.datetime(2026, 1, 1, 9, 0),   # still waiting
+        datetime.datetime(2026, 1, 1, 9, 31),  # past CYCLING_RECOVERY_TIME -> resume
+    ]))
     reads = [
         (np.array([0]), np.array([0, 5])),   # latched -- triggers cycling pause
         (np.array([3]), np.array([9, 5])),   # recovers after the pause
@@ -119,6 +135,31 @@ def test_persistent_latch_in_cycling_window_pauses_until_recovery(monkeypatch):
     c, s, t = _run(reads, monkeypatch)
     assert list(c) == [3]
     assert t == 1.0, "only the post-recovery bin should count"
+
+
+def test_cycling_pause_enforces_minimum_cooldown_even_if_recovery_time_already_passed(monkeypatch):
+    """The 2026-11-22/23 incident: a latch retriggers the cycling pause
+    AFTER the clock has already passed CYCLING_RECOVERY_TIME (e.g. it
+    relatched right after an earlier pause resumed). "wait until
+    CYCLING_RECOVERY_TIME" is then already true on the very next check --
+    a no-op that resumes (and starts pinging) immediately, which is
+    exactly what kept making it latch more. The pause must still hold for
+    CYCLING_MIN_COOLDOWN_S from right now in that case."""
+    monkeypatch.setattr(det, 'in_cycling_check_window', lambda now=None: True)
+    monkeypatch.setattr(det, 'CYCLING_LATCH_PERSIST_S', 0)
+    monkeypatch.setattr(det, 'CYCLING_MIN_COOLDOWN_S', 3600)
+    monkeypatch.setattr(det.datetime, 'datetime', _fake_clock([
+        datetime.datetime(2026, 1, 1, 10, 0),   # already an hour past CYCLING_RECOVERY_TIME (9:30)
+        datetime.datetime(2026, 1, 1, 10, 59),  # under an hour later -- must still be paused
+        datetime.datetime(2026, 1, 1, 11, 1),   # now past the real 1hr-from-now cooldown -> resume
+    ]))
+    reads = [
+        (np.array([0]), np.array([0, 5])),
+        (np.array([3]), np.array([9, 5])),
+    ]
+    c, s, t = _run(reads, monkeypatch)
+    assert list(c) == [3]
+    assert t == 1.0, "must have actually waited out the minimum cooldown, not resumed immediately"
 
 
 def test_persistent_latch_outside_cycling_window_does_not_pause(monkeypatch):
@@ -152,15 +193,36 @@ def test_dump_dark_alone_is_not_a_latch(monkeypatch):
 
 if __name__ == "__main__":
     class _MonkeyPatch:
+        """Minimal pytest-monkeypatch stand-in -- undo() restores every
+        patched attribute, same as pytest's real fixture does automatically
+        between test functions. Needed here because two tests in this file
+        both patch det.datetime.datetime (the globally-shared module, not a
+        per-test copy): without undo, the second test's real
+        datetime.datetime(...) literals would call whatever fake the first
+        test left behind instead of the real class."""
+        def __init__(self):
+            self._saved = []
+
         def setattr(self, obj, name, value):
+            self._saved.append((obj, name, getattr(obj, name)))
             setattr(obj, name, value)
 
-    mp = _MonkeyPatch()
-    test_latched_bin_is_discarded_and_retried(mp)
-    test_no_latch_counts_normally(mp)
-    test_one_loop_channel_lit_is_not_a_latch(mp)
-    test_all_loop_channels_dark_is_a_latch(mp)
-    test_persistent_latch_in_cycling_window_pauses_until_recovery(mp)
-    test_persistent_latch_outside_cycling_window_does_not_pause(mp)
-    test_dump_dark_alone_is_not_a_latch(mp)
+        def undo(self):
+            for obj, name, old in reversed(self._saved):
+                setattr(obj, name, old)
+            self._saved.clear()
+
+    for _test in [
+        test_latched_bin_is_discarded_and_retried,
+        test_no_latch_counts_normally,
+        test_one_loop_channel_lit_is_not_a_latch,
+        test_all_loop_channels_dark_is_a_latch,
+        test_persistent_latch_in_cycling_window_pauses_until_recovery,
+        test_persistent_latch_outside_cycling_window_does_not_pause,
+        test_cycling_pause_enforces_minimum_cooldown_even_if_recovery_time_already_passed,
+        test_dump_dark_alone_is_not_a_latch,
+    ]:
+        mp = _MonkeyPatch()
+        _test(mp)
+        mp.undo()
     print("ok")

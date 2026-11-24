@@ -9,6 +9,7 @@ description = "Automated polarisation tomography for photonic experiments"
 requires-python = ">=3.11"
 dependencies = [
     "numpy",
+    "scipy",
     "matplotlib",
     "pyserial",
     "mcculw>=1.0.0; sys_platform == 'win32'",

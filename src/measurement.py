@@ -37,6 +37,7 @@ if '--no-dump' in sys.argv:
 import libraries.tomography as tl
 import libraries.settings as st
 import libraries.plotting as plotting
+import libraries.kl_live as kl_live
 from libraries.basis_vectors import process_state_angles, basis_angles, tomo_angles
 from libraries.settings import HWP_IN, QWP_IN, COMPORT, SIM_MODE
 from libraries.waveplate_angles import unitaries_angles
@@ -111,6 +112,34 @@ def _play_tune():
         return
     for freq, ms in [(523, 150), (659, 150), (784, 150), (1046, 300)]:
         winsound.Beep(freq, ms)
+
+def _key_pressed():
+    """Non-blocking: returns the next pending stdin character, or None if
+    nothing's waiting. msvcrt (Windows, the real hardware target here) reads
+    a single keypress with no Enter needed; the POSIX fallback (sim/dev) uses
+    select on stdin, which only sees input after a line is submitted."""
+    try:
+        import msvcrt
+        return msvcrt.getch().decode(errors='ignore') if msvcrt.kbhit() else None
+    except ImportError:
+        import select
+        if select.select([sys.stdin], [], [], 0)[0]:
+            return sys.stdin.read(1)
+        return None
+
+
+def _check_pause():
+    """Call once per row from inside collect()'s loop: if 'p' was typed,
+    block (nothing discarded -- the generator/hardware read just isn't
+    resumed) until 'p' is typed again, so a mid-run fix doesn't cost the
+    run's progress the way Ctrl-C would."""
+    if (_key_pressed() or '').lower() != 'p':
+        return
+    print("\n\nPaused -- fix whatever needs fixing, then press p again to resume...", flush=True)
+    while (_key_pressed() or '').lower() != 'p':
+        time.sleep(0.5)
+    print("Resumed.\n", flush=True)
+
 
 def _set_unitary(N):
     """Returns the confirmed fixed-waveplate angles read back after moving
@@ -244,7 +273,7 @@ def _git_commit():
         return None
 
 
-def _save_results(rows, N, label, background=None, angles=None):
+def _save_results(rows, N, label, background=None, angles=None, stem=None):
     """Write rows to data/{timestamp}_measurement_N{N}_s{label}.csv, plus a
     same-named .json sidecar recording the delays/thresholds/etc. in effect
     for the run — so old data stays interpretable after later recalibration.
@@ -285,19 +314,27 @@ def _save_results(rows, N, label, background=None, angles=None):
     the .json sidecar (angles/background/calibration snapshot) even with
     zero rows -- e.g. interrupted before the per-row loop ever started --
     so that context isn't silently lost; only the .csv is skipped then.
+
+    stem lets a caller that already live-streamed rows to disk during
+    collection (see measurement()) reuse that same {timestamp}_measurement_...
+    path instead of getting a fresh "now" timestamp here — and the .csv
+    body is skipped entirely when that live file already exists, since it
+    already has every row. Defaults to the old behavior (stamp "now") for
+    _save_results's other caller.
     """
     if not rows and not angles and background is None:
         print("No data to save")
         return
     os.makedirs(st.DATA_DIR, exist_ok=True)
-    stem = f"{st.DATA_DIR}/{datetime.datetime.now():%Y%m%d_%H%M%S}_measurement_N{N}_s{label}"
-    if rows:
+    if stem is None:
+        stem = f"{st.DATA_DIR}/{datetime.datetime.now():%Y%m%d_%H%M%S}_measurement_N{N}_s{label}"
+    if rows and not Path(f"{stem}.csv").exists():
         fields = list(dict.fromkeys(k for r in rows for k in r))
         with open(f"{stem}.csv", 'w', newline='') as f:
             writer = csv.DictWriter(f, fieldnames=fields)
             writer.writeheader()
             writer.writerows(rows)
-    else:
+    elif not rows:
         print("No rows collected -- saving angles/background/calibration metadata only")
 
     calibration = _latest_calibration()
@@ -611,13 +648,19 @@ def _set_loop_optics():
     return angles
 
 
-def _set_5050_optics():
+def _set_5050_optics(hwp12_angle=22.5):
     """50/50 loop/exit split: input H, path-2 plates (IN_2/OUT_2) and H1/Q1
     parked at 0, HWP_12 at 22.5° (QWP_12 at 0) puts the recombined output
     in an equal superposition of path1 (TOM_1, exit) and path2 (OUT_2,
     loop) — confirmed via getUnitary, see tests/test_loop_exit_split.py.
     45° on HWP_12 is a different, deterministic all-exit solution, not
     this.
+
+    hwp12_angle overrides the 22.5° default -- used by
+    jitter_5050_calibration() to probe how sensitive the fitted
+    loss_per_loop_pass_5050 figure is to HWP_12 being off by up to a few
+    degrees (motor repeatability/backlash). Every other caller leaves it
+    at the default, exact 50/50 split.
 
     OUT_2 matters here: it sits inside the recirculating loop (applied to
     the continuing beam every pass, not just a one-shot analyzer), so a
@@ -630,11 +673,11 @@ def _set_5050_optics():
     angles = _set_input_basis('H')
     angles.update(_zero_path2_plates())
     angles.update(_zero_analyzer_plates())
-    print("Setting HWP_1/QWP_1 to 0°, HWP_12 to 22.5° (50/50 exit/loop split)")
+    print(f"Setting HWP_1/QWP_1 to 0°, HWP_12 to {hwp12_angle:.3f}° (50/50 exit/loop split)")
     angles['QWP_1'] = tl.move_stage(QWP_1, 0, COMPORT)
     angles['HWP_1'] = tl.move_stage(HWP_1, 0, COMPORT)
     angles['QWP_12'] = tl.move_stage(QWP_12, 0, COMPORT)
-    angles['HWP_12'] = tl.move_stage(HWP_12, 22.5, COMPORT)
+    angles['HWP_12'] = tl.move_stage(HWP_12, hwp12_angle, COMPORT)
     return angles
 
 
@@ -1332,6 +1375,13 @@ def measurement(N, performTomo=False, js=None, duration_s=None, auto=False):
     js = js if js is not None else [0]
     bases = ['H', 'V', 'A', 'D', 'R', 'L'] if performTomo else [None]
     settings = [(j, b) for j in js for b in bases]
+    label = 'all' if js == _input_states(N) else '-'.join(map(str, js)) if len(js) > 1 else js[0]
+
+    # decided now (not at save time) so the live-streamed CSV below has a
+    # filename a crash recovery can find — _save_results() at the end reuses
+    # this same stem instead of re-stamping "now"
+    os.makedirs(st.DATA_DIR, exist_ok=True)
+    stem = f"{st.DATA_DIR}/{datetime.datetime.now():%Y%m%d_%H%M%S}_measurement_N{N}_s{label}"
 
     if auto:
         total = duration_s
@@ -1355,12 +1405,45 @@ def measurement(N, performTomo=False, js=None, duration_s=None, auto=False):
     rows = []
     start = time.monotonic()
 
+    # live-write state: csv_file/csv_writer open lazily on the first row (so
+    # the header's fields come from a real row, same set _save_results would
+    # otherwise derive at the end) -- a crash/OS stall loses at most the
+    # unflushed last row instead of the whole run.
+    csv_file, csv_writer = None, None
+    # live-KL state: cumulative s0 (non-tomography) counts since this run
+    # started, and the KL computed from them as of the last ~10s print.
+    kl_counts, kl_int_time, kl_last_print, kl_str = {}, 0.0, 0.0, "n/a"
+    loss_cal = _find_latest_loss_calibration()[1]
+
     def collect(j, basis, duration):
+        nonlocal csv_file, csv_writer, kl_counts, kl_int_time, kl_last_print, kl_str
         for counts in _acquire_rows(N, duration):
-            rows.append({'N': N, 'input_state': j, 'basis': basis,
-                         'time': datetime.datetime.now().isoformat(),
-                         **counts})
-            print(f"[s{j} {basis or 'no-tomo'}] {counts}", end="\r", flush=True)
+            row = {'N': N, 'input_state': j, 'basis': basis,
+                   'time': datetime.datetime.now().isoformat(), **counts}
+            rows.append(row)
+
+            if csv_writer is None:
+                csv_file = open(f"{stem}.csv", 'w', newline='')
+                csv_writer = csv.DictWriter(csv_file, fieldnames=list(row.keys()))
+                csv_writer.writeheader()
+            csv_writer.writerow(row)
+            csv_file.flush()
+
+            _check_pause()
+
+            if j == 0 and basis is None:
+                for ch in st.det_chs_for(N):
+                    kl_counts[ch] = kl_counts.get(ch, 0) + counts.get(f'coinc_ch{ch}', 0)
+                kl_int_time += counts.get('int_time', 0.0)
+                if time.monotonic() - kl_last_print > 10:
+                    kl_last_print = time.monotonic()
+                    kl = kl_live.kl_rate_from_counts(N, kl_counts, kl_int_time,
+                                                      background or {'int_time': 1.0},
+                                                      loss_cal, st.det_chs_for(N))
+                    kl_str = f"{kl:.4f}" if kl is not None else "n/a"
+
+            print(f"[s{j} {basis or 'no-tomo'}] {counts}  | current KL div: {kl_str}",
+                  end="\r", flush=True)
 
     try:
         angle_log.append({'setting': 'unitary', **_set_unitary(N)})
@@ -1391,14 +1474,243 @@ def measurement(N, performTomo=False, js=None, duration_s=None, auto=False):
     except KeyboardInterrupt:
         print("\nStopped — saving what we have")
     finally:
+        if csv_file is not None:
+            csv_file.close()
+
+        # final KL from every s0 (non-tomography) row collected this run,
+        # not just the last live estimate
+        final_kl = (kl_live.kl_rate_from_counts(N, kl_counts, kl_int_time,
+                                                 background or {'int_time': 1.0},
+                                                 loss_cal, st.det_chs_for(N))
+                    if kl_int_time > 0 else None)
+        final_kl_str = f"{final_kl:.4f}" if final_kl is not None else "n/a"
+        print(f"\nKL divergence (s0): {final_kl_str}")
+
         # runs on success, error, or Ctrl-C — partial data still gets saved
-        label = 'all' if js == _input_states(N) else '-'.join(map(str, js)) if len(js) > 1 else js[0]
-        _save_results(rows, N, label, background=background, angles=angle_log)
-        notify(f"Measurement N={N} done ({len(rows)} rows)",
+        _save_results(rows, N, label, background=background, angles=angle_log, stem=stem)
+        notify(f"Measurement N={N} done ({len(rows)} rows, KL={final_kl_str})",
                title="Measurement Complete", priority="high")
         if time.monotonic() - start > 300:
             _play_tune()
     return rows
+
+
+# Waveplates jittered by jitter_unitary_measurement() -- every plate in a
+# U_N preset except the fixed mirror phases (m1/m2/m3 aren't motorized
+# stages, see _set_loop3_optics).
+JITTER_WAVEPLATE_KEYS = ['h1', 'q1', 'h2', 'q2', 'hin2', 'qin2', 'hf1', 'qf1', 'hf2', 'qf2']
+
+
+def _jitter_angles(base_angles, keys, max_deg, rng):
+    """base_angles with each of `keys` independently perturbed by a fresh
+    uniform(-max_deg, max_deg) offset (max_deg=0 -> the unperturbed
+    baseline). Returns (jittered_dict, offsets) -- offsets keyed the same
+    way, for logging what was actually applied."""
+    offsets = {k: float(rng.uniform(-max_deg, max_deg)) for k in keys}
+    jittered = {**base_angles, **{k: base_angles[k] + off for k, off in offsets.items()}}
+    return jittered, offsets
+
+
+def _plan_jitter_sweep(total_duration_s, dwell_s):
+    """How many dwell_s-long configs fit in total_duration_s (min 1) -- a
+    run that doesn't divide evenly just runs one config short, rather than
+    stretching the last config to use up the remainder."""
+    return max(1, int(total_duration_s // dwell_s))
+
+
+def jitter_unitary_measurement(N, total_duration_s=3600.0, max_jitter_deg=3.0,
+                                dwell_s=100.0, rng=None, auto=False):
+    """Sweep random +/-max_jitter_deg perturbations of U_N's 10 fixed
+    waveplate angles (JITTER_WAVEPLATE_KEYS), one dwell_s recording per
+    config, to see how sensitive the output distribution (and its KL
+    divergence) is to each plate being off by up to max_jitter_deg --
+    e.g. motor backlash/repeatability error. n_configs =
+    total_duration_s // dwell_s (see _plan_jitter_sweep); config 0 is
+    always the unjittered baseline so every run has a reference point.
+
+    Saved to data/{timestamp}_measurement_N{N}_sjitter.csv/.json, same
+    shape as a normal measurement() run plus a jitter_config (0, 1, 2,
+    ...) column and one jitter_<plate>_deg column per perturbed plate --
+    group rows by jitter_config and run each group through the usual
+    loss-correction + KL pipeline to compare configs.
+    """
+    rng = rng or np.random.default_rng()
+    n_configs = _plan_jitter_sweep(total_duration_s, dwell_s)
+    label = 'jitter'
+    os.makedirs(st.DATA_DIR, exist_ok=True)
+    stem = f"{st.DATA_DIR}/{datetime.datetime.now():%Y%m%d_%H%M%S}_measurement_N{N}_s{label}"
+
+    print(f"Angle-jitter sweep: {n_configs} configs x {dwell_s:.0f}s "
+          f"({_format_duration(n_configs * dwell_s)} total), "
+          f"+/-{max_jitter_deg:.1f}deg on {', '.join(JITTER_WAVEPLATE_KEYS)}.")
+    if not auto and input("Press Enter to begin, or any other key to cancel: ").strip():
+        return []
+
+    base_angles = unitaries_angles[N]
+    det_chs = st.det_chs_for(N)
+    loss_cal = _find_latest_loss_calibration()[1]
+    background, angle_log, rows, config_kls = None, [], [], {}
+    start = time.monotonic()
+    try:
+        angle_log.append({'setting': 's0', **_set_input_state(N, 0)})
+        print("Measuring background...")
+        background = _acquire_background(N)
+        print(f"  {background}")
+
+        for i in range(n_configs):
+            jittered, offsets = _jitter_angles(
+                base_angles, JITTER_WAVEPLATE_KEYS, 0.0 if i == 0 else max_jitter_deg, rng)
+            confirmed = _set_fixed_waveplates(jittered)
+            _beep()
+            print(f"config {i}/{n_configs - 1}: offsets(deg) = "
+                  f"{ {k: round(v, 3) for k, v in offsets.items()} }")
+            angle_log.append({'setting': f'jitter{i}', 'jitter_config': i,
+                               **{f'jitter_{k}_deg': v for k, v in offsets.items()}, **confirmed})
+            cfg_counts, cfg_int_time = {}, 0.0
+            for counts in _acquire_rows(N, dwell_s):
+                row = {'N': N, 'input_state': 0, 'jitter_config': i,
+                       **{f'jitter_{k}_deg': v for k, v in offsets.items()},
+                       'time': datetime.datetime.now().isoformat(), **counts}
+                rows.append(row)
+                for ch in det_chs:
+                    cfg_counts[ch] = cfg_counts.get(ch, 0) + counts.get(f'coinc_ch{ch}', 0)
+                cfg_int_time += counts.get('int_time', 0.0)
+                _check_pause()
+                print(f"[config {i}] {counts}", end="\r", flush=True)
+
+            # KL divergence (vs. uniform-renewal theory) for this config
+            # alone, same loss-corrected pipeline as measurement()'s live
+            # KL print -- lets a quick scan of the notification (or
+            # config_kls below) show which jittered angles made the
+            # output distribution worse/better without opening the CSV.
+            kl = kl_live.kl_rate_from_counts(N, cfg_counts, cfg_int_time, background,
+                                              loss_cal, det_chs)
+            config_kls[i] = kl
+            print(f"config {i} KL divergence: {f'{kl:.4f}' if kl is not None else 'n/a'}")
+    except KeyboardInterrupt:
+        print("\nStopped — saving what we have")
+    finally:
+        _save_results(rows, N, label, background=background, angles=angle_log, stem=stem)
+        kl_summary = ", ".join(f"{i}={kl:.4f}" if kl is not None else f"{i}=n/a"
+                                for i, kl in config_kls.items())
+        notify(f"Angle-jitter sweep N={N} done ({len(rows)} rows, {n_configs} configs) "
+               f"-- KL per config: {kl_summary}",
+               title="Jitter Sweep Complete", priority="high")
+        if time.monotonic() - start > 300:
+            _play_tune()
+    return rows
+
+
+def jitter_5050_calibration(total_duration_s=3600.0, max_jitter_deg=3.0,
+                             dwell_s=100.0, rng=None, has_pbs=False, auto=False):
+    """Sweep random +/-max_jitter_deg perturbations of HWP_12 -- the one
+    plate that sets the 50/50 loop/exit split ratio (see
+    _set_5050_optics) -- around its calibrated 22.5deg, one dwell_s
+    recording per config, fitting loss_per_loop_pass_5050 (see
+    calibrate_loss) fresh each time. Shows how sensitive that loss figure
+    is to HWP_12 motor error/drift. Config 0 is always the unjittered
+    baseline (offset 0). Same n_configs convention as
+    jitter_unitary_measurement (see _plan_jitter_sweep).
+
+    dwell_s is split into 5s bins (same convention as
+    calibrate_loss's own recordings) for _record_all_channels/
+    _fit_loop_decay's per-bin error estimate.
+
+    Saved to data/{timestamp}_5050_angle_jitter.json -- a list of
+    configs, each {config, offset_deg, hwp12_angle, counts, angles,
+    loss_per_loop_pass_5050[_err]} -- a separate file from
+    calibrate_loss's own *_loss_calibration.json, since this records many
+    configs rather than one settled stage value.
+    """
+    rng = rng or np.random.default_rng()
+    bin_s = 5.0
+    n_bins = max(1, round(dwell_s / bin_s))
+    dwell_s = n_bins * bin_s
+    n_configs = _plan_jitter_sweep(total_duration_s, dwell_s)
+
+    print(f"5050 angle-jitter sweep: {n_configs} configs x {dwell_s:.0f}s "
+          f"({_format_duration(n_configs * dwell_s)} total), "
+          f"+/-{max_jitter_deg:.1f}deg on HWP_12 (nominal 22.5deg).")
+    if not auto and input("Press Enter to begin, or any other key to cancel: ").strip():
+        return []
+
+    configs = []
+    start = time.monotonic()
+    try:
+        for i in range(n_configs):
+            _, offsets = _jitter_angles({'hwp12': 22.5}, ['hwp12'],
+                                         0.0 if i == 0 else max_jitter_deg, rng)
+            hwp12_angle = 22.5 + offsets['hwp12']
+            angles = _set_5050_optics(hwp12_angle=hwp12_angle)
+            print(f"config {i}/{n_configs - 1}: HWP_12 = {hwp12_angle:.3f}deg "
+                  f"(offset {offsets['hwp12']:+.3f})")
+            counts = (_record_all_channels_over_bases(n_bins, bin_s) if has_pbs
+                      else _record_all_channels(n_bins, bin_s))
+            decay_ratio, decay_ratio_err = _fit_loop_decay(counts, loop_chs=st.LOOP_CHS[:4])
+            entry = {'config': i, 'offset_deg': offsets['hwp12'], 'hwp12_angle': hwp12_angle,
+                      'counts': counts, 'angles': angles}
+            if decay_ratio is not None:
+                entry['loss_per_loop_pass_5050'] = decay_ratio / 0.5
+                entry['loss_per_loop_pass_5050_err'] = decay_ratio_err / 0.5
+            configs.append(entry)
+            _check_pause()
+    except KeyboardInterrupt:
+        print("\nStopped — saving what we have")
+    finally:
+        os.makedirs(st.DATA_DIR, exist_ok=True)
+        path = Path(f"{st.DATA_DIR}/{datetime.datetime.now():%Y%m%d_%H%M%S}_5050_angle_jitter.json")
+        path.write_text(json.dumps({
+            'max_jitter_deg': max_jitter_deg, 'dwell_s': dwell_s, 'has_pbs': has_pbs,
+            'git_commit': _git_commit(), 'saved_at': datetime.datetime.now().isoformat(),
+            'configs': configs,
+        }, indent=1))
+        print(f"\nSaved {len(configs)} configs -> {path.name}")
+        for c in configs:
+            loss = c.get('loss_per_loop_pass_5050')
+            loss_str = (f"{loss:.4f}+/-{c.get('loss_per_loop_pass_5050_err', 0):.4f}"
+                        if loss is not None else "n/a")
+            print(f"  config {c['config']}: offset={c['offset_deg']:+.3f}deg  loss_5050={loss_str}")
+        notify(f"5050 angle-jitter sweep done ({len(configs)} configs)",
+               title="Jitter Sweep Complete", priority="high")
+        if time.monotonic() - start > 300:
+            _play_tune()
+    return configs
+
+
+def angle_jitter_menu():
+    """Menu wrapper for jitter_unitary_measurement()/jitter_5050_calibration()."""
+    choice = input(
+        "Jitter which optics?\n"
+        "\t1. Unitary measurement (U_N's 10 fixed waveplates)\n"
+        "\t2. 5050 loss calibration (HWP_12 only)\n"
+        "\t0. Back\n"
+        "> ").strip()
+    if _is_back(choice):
+        return
+    total_s = _ask_jitter_duration()
+    deg = input("Max jitter per plate, in degrees (Enter = 3): ").strip()
+    max_jitter_deg = float(deg) if deg else 3.0
+    if choice == '1':
+        N = _ask_N()
+        if N is None:
+            return
+        jitter_unitary_measurement(N, total_duration_s=total_s, max_jitter_deg=max_jitter_deg)
+    elif choice == '2':
+        has_pbs = input("Output PBS installed? [y/N]: ").strip().lower() == 'y'
+        jitter_5050_calibration(total_duration_s=total_s, max_jitter_deg=max_jitter_deg, has_pbs=has_pbs)
+    else:
+        print("Please choose a valid option")
+
+
+def _ask_jitter_duration(default_s=3600.0):
+    m = input(f"Total sweep duration, in minutes (Enter = {default_s / 60:.0f}): ").strip()
+    if not m:
+        return default_s
+    try:
+        return float(m) * 60
+    except ValueError:
+        print("Enter a number of minutes -- using default")
+        return default_s
 
 
 def _ask_N():
@@ -1772,6 +2084,13 @@ def _describe_queue_step(step):
     if t == 'measurement':
         return (f"Measurement: N={step['N']}, js={step['js']}, "
                 f"tomo={step['tomo']}, duration_s={step['duration_s']}")
+    if t == 'jitter_unitary':
+        return (f"Unitary angle-jitter sweep: N={step['N']}, "
+                f"+/-{step['max_jitter_deg']}deg, total={_format_duration(step['total_duration_s'])}")
+    if t == 'jitter_5050':
+        pbs = ", PBS" if step.get('has_pbs') else ""
+        return (f"5050 angle-jitter sweep: +/-{step['max_jitter_deg']}deg on HWP_12, "
+                f"total={_format_duration(step['total_duration_s'])}{pbs}")
     return str(step)
 
 
@@ -1831,10 +2150,32 @@ def _ask_queue_measurement_step():
     return {'type': 'measurement', 'N': N, 'js': js, 'tomo': tomo, 'duration_s': duration_s}
 
 
+def _ask_jitter_unitary_step():
+    N = _ask_N()
+    if N is None:
+        return None
+    total_s = _ask_jitter_duration()
+    deg = input("Max jitter per plate, in degrees (Enter = 3): ").strip()
+    max_jitter_deg = float(deg) if deg else 3.0
+    return {'type': 'jitter_unitary', 'N': N, 'total_duration_s': total_s,
+            'max_jitter_deg': max_jitter_deg}
+
+
+def _ask_jitter_5050_step():
+    total_s = _ask_jitter_duration()
+    deg = input("Max jitter on HWP_12, in degrees (Enter = 3): ").strip()
+    max_jitter_deg = float(deg) if deg else 3.0
+    has_pbs = input("Output PBS installed? [y/N]: ").strip().lower() == 'y'
+    return {'type': 'jitter_5050', 'total_duration_s': total_s,
+            'max_jitter_deg': max_jitter_deg, 'has_pbs': has_pbs}
+
+
 _QUEUE_BUILDERS = {
     '1': ('Tune channel delays', _ask_tune_step),
     '2': ('Loss measurement', _ask_loss_step),
     '3': ('Unitary measurement', _ask_queue_measurement_step),
+    '4': ('Unitary angle-jitter sweep', _ask_jitter_unitary_step),
+    '5': ('5050 angle-jitter sweep', _ask_jitter_5050_step),
 }
 
 
@@ -1853,12 +2194,14 @@ def build_queue():
             "\n1. Tune channel delays\n"
             "2. Loss measurement\n"
             "3. Unitary measurement\n"
-            "4. Remove a step\n"
+            "4. Unitary angle-jitter sweep\n"
+            "5. 5050 angle-jitter sweep\n"
+            "6. Remove a step\n"
             "0. Done\n"
             "> ").strip()
         if choice == '0':
             return queue
-        if choice == '4':
+        if choice == '6':
             if not queue:
                 print("Queue is empty")
                 continue
@@ -1975,6 +2318,10 @@ def _estimate_step_seconds(step, history):
         n_states = len(_input_states(step['N'])) if js == 'all' else len(js)
         n_bases = 6 if step['tomo'] else 1
         return step['duration_s'] * n_states * n_bases
+    if t in ('jitter_unitary', 'jitter_5050'):
+        # total_duration_s is the budget the step itself was built with --
+        # known upfront, same as 'measurement', no history needed.
+        return step['total_duration_s']
     return history.get(_step_signature(step), {}).get('mean_s')
 
 
@@ -1999,6 +2346,13 @@ def _run_queue_step(step):
             js = _input_states(step['N'])
         measurement(step['N'], performTomo=step['tomo'], js=js,
                     duration_s=step['duration_s'], auto=True)
+    elif t == 'jitter_unitary':
+        jitter_unitary_measurement(step['N'], total_duration_s=step['total_duration_s'],
+                                    max_jitter_deg=step['max_jitter_deg'], auto=True)
+    elif t == 'jitter_5050':
+        jitter_5050_calibration(total_duration_s=step['total_duration_s'],
+                                 max_jitter_deg=step['max_jitter_deg'],
+                                 has_pbs=step.get('has_pbs', False), auto=True)
     else:
         raise ValueError(f"Unknown step type: {t!r}")
 
@@ -2124,6 +2478,7 @@ def main():
             "\t7. Test antilatch server connection\n"
             "\t8. Unlatch detectors\n"
             "\t9. Keep detectors unlatched\n"
+            "\t10. Angle-jitter sweep (unitary or 5050 loss cal)\n"
             )
 
         match n:
@@ -2203,8 +2558,10 @@ def main():
                                 print("Detectors unlatched (bias voltages cycled)")
                     except KeyboardInterrupt:
                         print("\nPeriodic unlatching stopped.")
+            case '10':
+                angle_jitter_menu()
             case _:
-                print("Please choose a valid option 1-9 from list:")
+                print("Please choose a valid option 1-10 from list:")
 
 
 if __name__ == "__main__":

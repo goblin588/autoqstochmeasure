@@ -12,7 +12,7 @@ from libraries.settings import (ANTILATCH_HOST, ANTILATCH_PORT,
                                 LOOP_CHS, DUMP_CH, BLACKOUT_START,
                                 BLACKOUT_END, in_blackout_window,
                                 CYCLING_RECOVERY_TIME, CYCLING_LATCH_PERSIST_S,
-                                in_cycling_check_window)
+                                CYCLING_MIN_COOLDOWN_S, in_cycling_check_window)
 
 import numpy as np
 
@@ -271,13 +271,24 @@ class Logic16:
                     latch_streak_start = time.monotonic()
                 streak_s = time.monotonic() - latch_streak_start
                 if in_cycling_check_window() and streak_s >= CYCLING_LATCH_PERSIST_S:
+                    # at least CYCLING_MIN_COOLDOWN_S from NOW, not just "until
+                    # the CYCLING_RECOVERY_TIME clock time" -- a retrigger (the
+                    # detector is still latching after an earlier pause already
+                    # carried the clock past CYCLING_RECOVERY_TIME) must still
+                    # get a real cooldown instead of this being a no-op that
+                    # resumes (and starts pinging again) immediately.
+                    now = datetime.datetime.now()
+                    recovery_today = now.replace(hour=CYCLING_RECOVERY_TIME.hour,
+                                                  minute=CYCLING_RECOVERY_TIME.minute,
+                                                  second=0, microsecond=0)
+                    target = max(recovery_today, now + datetime.timedelta(seconds=CYCLING_MIN_COOLDOWN_S))
                     print(f"\nLatching detected -- zero counts on: {reasons_str} "
-                          f"-- persisted {streak_s:.0f}s in the 3-6am cycling-check "
+                          f"-- persisted {streak_s:.0f}s in the cycling-check "
                           f"window, assuming detector cycling and pausing measurement "
-                          f"until {CYCLING_RECOVERY_TIME:%H:%M}...", flush=True)
-                    while datetime.datetime.now().time() < CYCLING_RECOVERY_TIME:
+                          f"until {target:%H:%M}...", flush=True)
+                    while datetime.datetime.now() < target:
                         time.sleep(60)
-                    print(f"\nResuming after cycling pause ({CYCLING_RECOVERY_TIME:%H:%M}).",
+                    print(f"\nResuming after cycling pause ({target:%H:%M}).",
                           flush=True)
                     latch_streak_start = None
                     has_latched = 0
