@@ -19,7 +19,7 @@ _settings_stub = types.SimpleNamespace(
     delays_for=lambda: [0.0] * 16, save_calibration=lambda *a, **kw: None,
     BLACKOUT_START=datetime.time(5, 0), BLACKOUT_END=datetime.time(7, 30),
     in_blackout_window=lambda now=None: False,
-    CYCLING_RECOVERY_TIME=datetime.time(8, 30), CYCLING_LATCH_PERSIST_S=600,
+    CYCLING_RECOVERY_TIME=datetime.time(9, 30), CYCLING_LATCH_PERSIST_S=600, CYCLING_MIN_COOLDOWN_S=3600,
     in_cycling_check_window=lambda now=None: False,
 )
 # Direct assignment, not setdefault: test_scan_resweep.py registers the same

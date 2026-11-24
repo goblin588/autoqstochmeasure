@@ -210,10 +210,20 @@ def in_blackout_window(now=None):
 # incident data yet on how early it can start or how long recovery actually
 # takes under this new logic, so all three values here are provisional --
 # revisit once this has actually caught a real incident.
+# 2026-11-22/23 incident: recovery wasn't done by 8:30 after all -- the
+# detector kept latching well past it, and resuming normal (ping+retry)
+# operation at 8:30 on a detector that was still too hot made it latch
+# MORE, not less (same hypothesis as BLACKOUT_* above: pinging while still
+# recovering doesn't help and may hurt). Recovery time pushed back an hour
+# (8:30 -> 9:30); CHECK_END widened well past it (6:00 -> 11:00) so a latch
+# that's STILL going after this first cooldown can retrigger another
+# pause-and-wait instead of falling through to ping/retry the moment the
+# clock passes the old 6:00 cutoff.
 CYCLING_CHECK_START = datetime.time(3, 0)
-CYCLING_CHECK_END = datetime.time(6, 0)
-CYCLING_RECOVERY_TIME = datetime.time(8, 30)
+CYCLING_CHECK_END = datetime.time(11, 0)
+CYCLING_RECOVERY_TIME = datetime.time(9, 30)
 CYCLING_LATCH_PERSIST_S = 600  # how long a latch must persist before it's treated as cycling, not a normal blip
+CYCLING_MIN_COOLDOWN_S = 3600  # floor on each pause's actual wait, see detector.py -- a retrigger after CYCLING_RECOVERY_TIME has already passed must still cool down, not no-op
 
 
 def in_cycling_check_window(now=None):
