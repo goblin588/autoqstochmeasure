@@ -74,7 +74,7 @@ CHANNELS = {
     10: {'delay': 1656, 'threshold': THRESH_CH},  # loop 4
     12: {'delay': 1223, 'threshold': THRESH_CH},  # loop 5
     14: {'delay': 800,  'threshold': THRESH_CH},  # loop 6
-    7:  {'delay': 790,  'threshold': 0.1},  # dump — parked at dump-after-6 (DUMP_DELAYS[6])
+    7:  {'delay': 790,  'threshold': 0.05},  # dump — parked at dump-after-6 (DUMP_DELAYS[6])
 }
 # "Dump After" column of the calibration table — dump channel delay if the
 # photon is dumped having completed k loops (0 = herald row, straight to
@@ -140,7 +140,7 @@ DET_CHS = [*LOOP_CHS, DUMP_CH] if DUMP_ENABLED else list(LOOP_CHS)
 SINGLE_DET_CHS = [TRIGG_CH, *DET_CHS]
 COINCIDENCE_CHS = [[TRIGG_CH, ch] for ch in DET_CHS]
 COINCIDENCE_WINDOW = 2.0  # ns — keep within 1-3; tune_delays sets this to 1.5 ns after tuning
-MEASUREMENT_INTEGRATION_S = 1.0  # seconds per row in measurement(); raise if 1 s rows are too noisy
+MEASUREMENT_INTEGRATION_S = 5.0  # seconds per row in measurement(); raise if 1 s rows are too noisy
 
 BACKGROUND_OFFSET_NS = 15.0  # off a channel's tuned delay = misses the real photon, counts accidentals only
 
@@ -158,7 +158,7 @@ MEASUREMENT_BG_BIN_S = 5.0
 # Anchored on ch4 (~1.5 s, plenty of signal) and ch14 (~15 s, barely any left);
 # the channels between are a linear guess — tune these down/up as real noise
 # is observed. Dump (ch7) isn't a loop step so it just uses the flat fallback.
-TUNE_INTEGRATION_S = {4: 1.5, 6: 4.2, 8: 6.9, 10: 9.6, 12: 12.3, 14: 15.0}
+TUNE_INTEGRATION_S = {4: 1, 6: 4, 8: 6, 10: 9, 12: 10, 14: 10.0}
 
 # measurement()'s default for longer multi-setting runs: above ROUND_ROBIN_THRESHOLD_S
 # total, settings (state x basis) are interleaved in ROUND_ROBIN_COLLECTION_TIME_S bins
