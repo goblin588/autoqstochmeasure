@@ -50,6 +50,23 @@ from libraries.settings import (HWP_IN, QWP_IN, QWP_TOM_DUMP, HWP_TOM_DUMP,
 from libraries.notifier import notify
 
 
+# short key -> (full stage name, stage object) for every fixed waveplate
+# _set_fixed_waveplates moves. Single source of truth for that mapping --
+# _full_angles_to_short() below inverts it rather than keeping a second copy.
+_FIXED_WAVEPLATE_KEYS = [
+    ('hin2', 'HWP_IN_2',  HWP_IN_2),
+    ('qin2', 'QWP_IN_2',  QWP_IN_2),
+    ('hf2',  'HWP_OUT_2', HWP_OUT_2),
+    ('qf2',  'QWP_OUT_2', QWP_OUT_2),
+    ('hf1',  'HWP_TOM_1', HWP_TOM_1),
+    ('qf1',  'QWP_TOM_1', QWP_TOM_1),
+    ('h1',   'HWP_1',     HWP_1),
+    ('q1',   'QWP_1',     QWP_1),
+    ('h2',   'HWP_12',    HWP_12),
+    ('q2',   'QWP_12',    QWP_12),
+]
+
+
 def _set_fixed_waveplates(angles, path=None):
     """Move any fixed-position waveplates that have non-zero angles set.
 
@@ -59,26 +76,27 @@ def _set_fixed_waveplates(angles, path=None):
     Returns the confirmed angle of every plate actually moved, keyed by
     stage name (e.g. 'HWP_IN_2') — skipped/unset plates are left out.
     """
-    plates = [
-        ('hin2', 'HWP_IN_2',  HWP_IN_2),
-        ('qin2', 'QWP_IN_2',  QWP_IN_2),
-        ('hf2',  'HWP_OUT_2', HWP_OUT_2),
-        ('qf2',  'QWP_OUT_2', QWP_OUT_2),
-        ('hf1',  'HWP_TOM_1', HWP_TOM_1),
-        ('qf1',  'QWP_TOM_1', QWP_TOM_1),
-        ('h1',   'HWP_1',     HWP_1),
-        ('q1',   'QWP_1',     QWP_1),
-        ('h2',   'HWP_12',    HWP_12),
-        ('q2',   'QWP_12',    QWP_12),
-    ]
     skip = {1: ('hf1', 'qf1'), 2: ('hf2', 'qf2')}.get(path, ())
     confirmed = {}
-    for key, name, stage in plates:
+    for key, name, stage in _FIXED_WAVEPLATE_KEYS:
         if key in skip or angles.get(key) is None:
             continue
         print(f"Setting {name} to {angles[key]}°")
         confirmed[name] = tl.move_stage(stage, angles[key], COMPORT)
     return confirmed
+
+
+def _full_angles_to_short(confirmed):
+    """Inverse of _set_fixed_waveplates's key mapping: {'HWP_1': 90.0, ...} -> {'h1': 90.0, ...}.
+
+    Derived from _FIXED_WAVEPLATE_KEYS (same mapping _set_fixed_waveplates
+    uses) rather than a second literal. Keys in `confirmed` that aren't one
+    of these full stage names (e.g. a 'setting'/'jitter_config' label, or
+    an unrelated stage like 'HWP_IN') are silently ignored.
+    """
+    full_to_short = {name: key for key, name, _stage in _FIXED_WAVEPLATE_KEYS}
+    return {full_to_short[name]: angle for name, angle in confirmed.items()
+            if name in full_to_short}
 
 def _set_input_state(N, j=0):
     """Set input state j for process N. defaults to s0_N.
@@ -1335,12 +1353,18 @@ def _round_robin_plan(settings, total, bin_s):
             remaining[s] -= chunk
 
 
-def measurement(N, performTomo=False, js=None, duration_s=None, auto=False):
+def measurement(N, performTomo=False, js=None, duration_s=None, auto=False,
+                 fixed_waveplate_angles=None):
     """Collect statistics through unitary N, one row per st.MEASUREMENT_INTEGRATION_S seconds.
 
     performTomo=False : collect at the current analyzer setting
     performTomo=True  : full 6-basis tomo sweep
     js                : input states to repeat for (list of j). None = [0] (s0 only).
+    fixed_waveplate_angles : short-key angle dict (see _set_fixed_waveplates) to
+                      park the 10 fixed waveplates at instead of N's plain
+                      nominal unitary -- e.g. a specific jittered config a
+                      caller already chose. None (default) keeps the normal
+                      _set_unitary(N) behaviour.
 
     Asks for a collection time per setting (input state x basis); Enter
     defaults to 20 min, 0 streams until Ctrl-C. When there's more than one setting and the total
@@ -1446,7 +1470,13 @@ def measurement(N, performTomo=False, js=None, duration_s=None, auto=False):
                   end="\r", flush=True)
 
     try:
-        angle_log.append({'setting': 'unitary', **_set_unitary(N)})
+        if fixed_waveplate_angles is not None:
+            confirmed = _set_fixed_waveplates(fixed_waveplate_angles)
+            _beep()
+            print("CUSTOM FIXED-WAVEPLATE CONFIG READY")
+            angle_log.append({'setting': 'custom_angles', **confirmed})
+        else:
+            angle_log.append({'setting': 'unitary', **_set_unitary(N)})
 
         print(f"Measuring background (+{st.MEASUREMENT_BG_OFFSET_NS:.0f}ns off tuned delays, "
               f"{st.MEASUREMENT_BG_N_BINS} x {st.MEASUREMENT_BG_BIN_S:.0f}s bins)...")
@@ -1533,6 +1563,13 @@ def jitter_unitary_measurement(N, total_duration_s=3600.0, max_jitter_deg=3.0,
     ...) column and one jitter_<plate>_deg column per perturbed plate --
     group rows by jitter_config and run each group through the usual
     loss-correction + KL pipeline to compare configs.
+
+    Returns (rows, config_kls, angle_log): rows is the flat list of result
+    rows (as saved); config_kls is {jitter_config: kl_or_None}, one entry
+    per config, in the same loss-corrected-KL convention as the per-config
+    print above; angle_log is the list of per-config angle-log entries
+    (each has 'setting', 'jitter_config', the jitter_<plate>_deg offsets,
+    and the confirmed full-stage-name angles all merged into one dict).
     """
     rng = rng or np.random.default_rng()
     n_configs = _plan_jitter_sweep(total_duration_s, dwell_s)
@@ -1544,7 +1581,7 @@ def jitter_unitary_measurement(N, total_duration_s=3600.0, max_jitter_deg=3.0,
           f"({_format_duration(n_configs * dwell_s)} total), "
           f"+/-{max_jitter_deg:.1f}deg on {', '.join(JITTER_WAVEPLATE_KEYS)}.")
     if not auto and input("Press Enter to begin, or any other key to cancel: ").strip():
-        return []
+        return [], {}, []
 
     base_angles = unitaries_angles[N]
     det_chs = st.det_chs_for(N)
@@ -1598,7 +1635,93 @@ def jitter_unitary_measurement(N, total_duration_s=3600.0, max_jitter_deg=3.0,
                title="Jitter Sweep Complete", priority="high")
         if time.monotonic() - start > 300:
             _play_tune()
-    return rows
+    return rows, config_kls, angle_log
+
+
+def jitter_then_measure(N, total_duration_s=3600.0, max_jitter_deg=3.0, dwell_s=100.0,
+                         n_best=3, sall_duration_s=None, rng=None, auto=False):
+    """Angle-jitter sweep (see jitter_unitary_measurement), then a full sall
+    (all-input-states) measurement at each of the n_best lowest-KL configs
+    found, in order from best to worst.
+
+    Runs jitter_unitary_measurement(N, ..., auto=True) to sweep and score
+    configs by KL divergence (lower = closer to theory = better), then for
+    each of the n_best best configs: physically returns to that config's
+    angles (_set_fixed_waveplates) and runs a full
+    measurement(N, js=_input_states(N), ...) there.
+
+    auto=False (interactive, the default): asks jitter duration
+    (_ask_jitter_duration), max jitter degrees (same prompt as
+    angle_jitter_menu), and sall duration (_ask_duration) once up front --
+    the sall duration answer is then reused for all n_best runs (passed as
+    duration_s with auto=True into measurement()), rather than asking 3
+    times. auto=True: total_duration_s/max_jitter_deg/sall_duration_s must
+    already be given as arguments (same convention as
+    measurement()/jitter_unitary_measurement()'s own auto parameter).
+    """
+    if not auto:
+        total_duration_s = _ask_jitter_duration()
+        deg = input("Max jitter per plate, in degrees (Enter = 3): ").strip()
+        max_jitter_deg = float(deg) if deg else 3.0
+        sall_duration_s = _ask_duration()
+
+    # Operator (or our own prompts above) already answered the jitter
+    # questions -- always auto=True for this inner call so it doesn't ask again.
+    rows, config_kls, angle_log = jitter_unitary_measurement(
+        N, total_duration_s=total_duration_s, max_jitter_deg=max_jitter_deg,
+        dwell_s=dwell_s, rng=rng, auto=True)
+
+    # Rank by KL ascending (lower = closer to theory = better); configs with
+    # no usable KL (None -- e.g. zero counts) can't be ranked and are dropped.
+    ranked = sorted((i for i, kl in config_kls.items() if kl is not None),
+                    key=lambda i: config_kls[i])
+    chosen = ranked[:n_best]
+
+    print("\nJitter sweep ranking by KL divergence (lower = better):")
+    for rank, i in enumerate(ranked, 1):
+        marker = "  <- selected" if i in chosen else ""
+        print(f"  #{rank}: config {i}  KL={config_kls[i]:.4f}{marker}")
+    if not ranked:
+        print("No config had a usable KL -- nothing to sall-measure.")
+        return chosen, config_kls
+    if len(chosen) < n_best:
+        print(f"Only {len(chosen)} usable config(s) available (wanted n_best={n_best}) "
+              f"-- measuring what we have.")
+
+    angle_by_config = {entry['jitter_config']: entry for entry in angle_log
+                        if 'jitter_config' in entry}
+    full_names = {name for _key, name, _stage in _FIXED_WAVEPLATE_KEYS}
+
+    for rank, i in enumerate(chosen, 1):
+        entry = angle_by_config.get(i)
+        if entry is None:
+            print(f"config {i}: no angle_log entry found -- skipping")
+            continue
+        # entry mixes 'setting'/'jitter_config'/'jitter_<plate>_deg' labels in
+        # with the confirmed full-stage-name angles -- keep only the latter.
+        full_angles = {k: v for k, v in entry.items() if k in full_names}
+        short_angles = _full_angles_to_short(full_angles)
+
+        print(f"\n[{rank}/{len(chosen)}] Running full sall measurement at jitter config {i} "
+              f"(KL={config_kls[i]:.4f})...")
+        try:
+            # measurement() already swallows KeyboardInterrupt internally and
+            # saves partial data -- so a single Ctrl-C here only skips the
+            # REST of the current sall run, and this loop moves on to the
+            # next best config. Accepted quirk, not a bug to fix.
+            #
+            # fixed_waveplate_angles=short_angles (not a separate
+            # _set_fixed_waveplates() call beforehand) -- measurement() always
+            # repositions the waveplates itself at its own start (normally via
+            # _set_unitary(N)), so pre-positioning here and letting measurement()
+            # reset to N's nominal unitary a moment later silently threw away
+            # every jittered config and measured the plain baseline instead.
+            measurement(N, js=_input_states(N), duration_s=sall_duration_s, auto=True,
+                        fixed_waveplate_angles=short_angles)
+        except KeyboardInterrupt:
+            print(f"\nStopped sall measurement at config {i} -- continuing to next config")
+
+    return chosen, config_kls
 
 
 def jitter_5050_calibration(total_duration_s=3600.0, max_jitter_deg=3.0,
@@ -2479,6 +2602,7 @@ def main():
             "\t8. Unlatch detectors\n"
             "\t9. Keep detectors unlatched\n"
             "\t10. Angle-jitter sweep (unitary or 5050 loss cal)\n"
+            "\t11. Jitter sweep, then sall-measure the best configs\n"
             )
 
         match n:
@@ -2560,8 +2684,13 @@ def main():
                         print("\nPeriodic unlatching stopped.")
             case '10':
                 angle_jitter_menu()
+            case '11':
+                N = _ask_N()
+                if N is None:
+                    continue
+                jitter_then_measure(N)
             case _:
-                print("Please choose a valid option 1-10 from list:")
+                print("Please choose a valid option 1-11 from list:")
 
 
 if __name__ == "__main__":
