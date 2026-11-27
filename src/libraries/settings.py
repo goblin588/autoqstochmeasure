@@ -68,14 +68,15 @@ LOOP_CHS = [4, 6, 8, 10, 12, 14]  # loop 1..6
 DUMP_CH = 7
 CHANNELS = {
     3:  {'delay': 3841, 'threshold': THRESH_HER},  # herald
-    4:  {'delay': 2956, 'threshold': THRESH_CH},  # loop 1
-    6:  {'delay': 2521, 'threshold': THRESH_CH},  # loop 2
-    8:  {'delay': 2089, 'threshold': THRESH_CH},  # loop 3
-    10: {'delay': 1656, 'threshold': THRESH_CH},  # loop 4
-    12: {'delay': 1223, 'threshold': THRESH_CH},  # loop 5
-    14: {'delay': 800,  'threshold': THRESH_CH},  # loop 6
+    4:  {'delay': 2970.88, 'threshold': THRESH_CH},  # loop 1
+    6:  {'delay': 2534.88, 'threshold': THRESH_CH},  # loop 2
+    8:  {'delay': 2103.37, 'threshold': THRESH_CH},  # loop 3
+    10: {'delay': 1667.81, 'threshold': THRESH_CH},  # loop 4
+    12: {'delay': 1235.14, 'threshold': THRESH_CH},  # loop 5
+    14: {'delay': 811.22,  'threshold': THRESH_CH},  # loop 6
     7:  {'delay': 790,  'threshold': 0.05},  # dump — parked at dump-after-6 (DUMP_DELAYS[6])
 }
+
 # "Dump After" column of the calibration table — dump channel delay if the
 # photon is dumped having completed k loops (0 = herald row, straight to
 # dump). Only used directly by path-2 tomo (_tomo_path2/check_projector),
